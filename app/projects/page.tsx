@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { supabase } from "../lib/supabase";
 
 const navigation = [
   { label: "Dashboard", href: "/" },
@@ -32,6 +34,44 @@ export default function ProjectsPage() {
   const [search, setSearch] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+  const router = useRouter();
+
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (mounted) {
+        if (error) console.error("Unable to check session:", error);
+        setLoggedIn(Boolean(data.session));
+      }
+    });
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        if (mounted) setLoggedIn(Boolean(session));
+      }
+    );
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleLogout() {
+    if (signingOut) return;
+    setSigningOut(true);
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      alert(`Unable to sign out: ${error.message}`);
+      setSigningOut(false);
+      return;
+    }
+    setLoggedIn(false);
+    setMenuOpen(false);
+    router.replace("/login");
+    router.refresh();
+  }
+
 
   useEffect(() => {
     try {
@@ -102,7 +142,17 @@ export default function ProjectsPage() {
               </Link>
             ))}
           </nav>
-          <Link href="/projects/new" className="hidden rounded-xl bg-[#ED1C24] px-6 py-4 text-sm font-black text-white shadow-lg transition hover:bg-red-700 sm:inline-flex">+ New Project</Link>
+          <div className="hidden items-center gap-3 lg:flex">
+            <Link href="/projects/new" className="rounded-xl bg-[#ED1C24] px-5 py-4 text-sm font-black text-white shadow-lg transition hover:bg-red-700">+ New Project</Link>
+            {loggedIn === false && (
+              <Link href="/login" className="rounded-xl border-2 border-[#ED1C24] px-5 py-3.5 text-sm font-black text-[#ED1C24] hover:bg-red-50">Log In</Link>
+            )}
+            {loggedIn === true && (
+              <button type="button" onClick={handleLogout} disabled={signingOut} className="rounded-xl border-2 border-[#ED1C24] px-5 py-3.5 text-sm font-black text-[#ED1C24] hover:bg-red-50 disabled:opacity-50">
+                {signingOut ? "Signing Out..." : "Log Out"}
+              </button>
+            )}
+          </div>
           <button type="button" onClick={() => setMenuOpen(!menuOpen)} aria-label={menuOpen ? "Close navigation" : "Open navigation"} aria-expanded={menuOpen} className="rounded-xl border border-gray-200 px-4 py-3 text-xl lg:hidden">{menuOpen ? "✕" : "☰"}</button>
         </div>
         {menuOpen && (
@@ -110,6 +160,14 @@ export default function ProjectsPage() {
             {[...navigation, {label:"AI Walkthrough",href:"/walkthrough"}, {label:"New Project",href:"/projects/new"}].map(item => (
               <Link key={item.href} href={item.href} onClick={() => setMenuOpen(false)} className="block rounded-xl px-4 py-4 font-bold hover:bg-red-50 hover:text-[#ED1C24]">{item.label}</Link>
             ))}
+            {loggedIn === false && (
+              <Link href="/login" onClick={() => setMenuOpen(false)} className="mt-3 block rounded-xl bg-[#ED1C24] px-4 py-4 text-center font-black text-white">Log In</Link>
+            )}
+            {loggedIn === true && (
+              <button type="button" onClick={handleLogout} disabled={signingOut} className="mt-3 block w-full rounded-xl bg-[#ED1C24] px-4 py-4 text-center font-black text-white disabled:opacity-50">
+                {signingOut ? "Signing Out..." : "Log Out"}
+              </button>
+            )}
           </nav>
         )}
       </header>
@@ -132,12 +190,7 @@ export default function ProjectsPage() {
             </p>
           </div>
 
-          <Link
-            href="/projects/new"
-            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#F71920] px-6 py-4 font-black text-white shadow-md transition hover:bg-red-700"
-          >
-            + New Project
-          </Link>
+         
         </div>
 
         {/* PROJECT STATISTICS */}

@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { supabase } from "../lib/supabase";
 
 type Rates = {
   coverage: number;
@@ -83,6 +85,9 @@ function money(value: number) {
 }
 
 export default function SettingsPage() {
+  const router = useRouter();
+  const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [rates, setRates] = useState<Rates>(DEFAULT_RATES);
   const [loaded, setLoaded] = useState(false);
@@ -121,6 +126,37 @@ export default function SettingsPage() {
       setLoaded(true);
     }
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) console.error("Unable to check login:", error);
+      setLoggedIn(Boolean(data.session));
+    });
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (mounted) setLoggedIn(Boolean(session));
+    });
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleLogout() {
+    if (signingOut) return;
+    setSigningOut(true);
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      alert(`Unable to sign out: ${error.message}`);
+      setSigningOut(false);
+      return;
+    }
+    setLoggedIn(false);
+    setMenuOpen(false);
+    router.replace("/login");
+    router.refresh();
+  }
 
   function updateRate(key: keyof Rates, value: string) {
     const number = Number(value);
@@ -239,6 +275,19 @@ export default function SettingsPage() {
             + New Project
           </Link>
 
+          <div className="hidden shrink-0 lg:flex">
+            {loggedIn === true ? (
+              <button type="button" onClick={handleLogout} disabled={signingOut}
+                className="rounded-xl border-2 border-[#ED1C24] px-5 py-3 text-sm font-black text-[#ED1C24] transition hover:bg-red-50 disabled:opacity-50">
+                {signingOut ? "Logging Out..." : "Log Out"}
+              </button>
+            ) : loggedIn === false ? (
+              <Link href="/login" className="rounded-xl border-2 border-[#ED1C24] px-5 py-3 text-sm font-black text-[#ED1C24] transition hover:bg-red-50">
+                Log In
+              </Link>
+            ) : null}
+          </div>
+
           <button
             type="button"
             onClick={() => setMenuOpen(!menuOpen)}
@@ -266,6 +315,17 @@ export default function SettingsPage() {
                 {item.label}
               </Link>
             ))}
+            {loggedIn === true ? (
+              <button type="button" onClick={handleLogout} disabled={signingOut}
+                className="block w-full rounded-xl px-4 py-4 text-left font-bold text-[#ED1C24] hover:bg-red-50 disabled:opacity-50">
+                {signingOut ? "Logging Out..." : "Log Out"}
+              </button>
+            ) : loggedIn === false ? (
+              <Link href="/login" onClick={() => setMenuOpen(false)}
+                className="block rounded-xl px-4 py-4 font-bold text-[#ED1C24] hover:bg-red-50">
+                Log In
+              </Link>
+            ) : null}
           </nav>
         )}
       </header>

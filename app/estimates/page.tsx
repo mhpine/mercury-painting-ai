@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { supabase } from "../lib/supabase";
 
 type Project = {
   id: string;
@@ -63,6 +65,39 @@ function money(value: number) {
 
 export default function EstimatesPage() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+  const router = useRouter();
+
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) console.error("Unable to check login:", error);
+      if (mounted) setLoggedIn(Boolean(data.session));
+    });
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (mounted) setLoggedIn(Boolean(session));
+    });
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleLogout() {
+    if (signingOut) return;
+    setSigningOut(true);
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      alert(`Unable to sign out: ${error.message}`);
+      setSigningOut(false);
+      return;
+    }
+    setLoggedIn(false);
+    setMenuOpen(false);
+    router.replace("/login");
+    router.refresh();
+  }
   const [projects, setProjects] = useState<Project[]>([]);
   const [walkthroughs, setWalkthroughs] = useState<Walkthrough[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -248,6 +283,19 @@ export default function EstimatesPage() {
             + New Project
           </Link>
 
+          <div className="hidden lg:flex">
+            {loggedIn === true ? (
+              <button type="button" onClick={handleLogout} disabled={signingOut}
+                className="rounded-xl border border-gray-200 px-5 py-4 text-sm font-black text-[#252525] hover:bg-gray-100 disabled:opacity-50">
+                {signingOut ? "Logging Out..." : "Log Out"}
+              </button>
+            ) : loggedIn === false ? (
+              <Link href="/login" className="rounded-xl border border-gray-200 px-5 py-4 text-sm font-black text-[#252525] hover:bg-gray-100">
+                Log In
+              </Link>
+            ) : null}
+          </div>
+
           <button
             type="button"
             onClick={() => setMenuOpen(!menuOpen)}
@@ -275,6 +323,17 @@ export default function EstimatesPage() {
                 {item.label}
               </Link>
             ))}
+            {loggedIn === true ? (
+              <button type="button" onClick={handleLogout} disabled={signingOut}
+                className="block w-full rounded-xl px-4 py-4 text-left font-bold hover:bg-red-50 hover:text-[#ED1C24] disabled:opacity-50">
+                {signingOut ? "Logging Out..." : "Log Out"}
+              </button>
+            ) : loggedIn === false ? (
+              <Link href="/login" onClick={() => setMenuOpen(false)}
+                className="block rounded-xl px-4 py-4 font-bold hover:bg-red-50 hover:text-[#ED1C24]">
+                Log In
+              </Link>
+            ) : null}
           </nav>
         )}
       </header>

@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { supabase } from "../lib/supabase";
 
 type Project = {
   id: string;
@@ -70,7 +72,45 @@ const formatArea = (n: number) =>
   n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 export default function WalkthroughPage() {
+  const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (mounted) {
+        if (error) console.error("Unable to check session:", error);
+        setLoggedIn(Boolean(data.session));
+      }
+    });
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        if (mounted) setLoggedIn(Boolean(session));
+      }
+    );
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleSignOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      alert(error.message);
+      setSigningOut(false);
+      return;
+    }
+    setLoggedIn(false);
+    setMenuOpen(false);
+    router.replace("/login");
+    router.refresh();
+  }
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [surfaces, setSurfaces] = useState<Surface[]>([]);
@@ -291,6 +331,20 @@ export default function WalkthroughPage() {
             className="hidden rounded-xl bg-[#ED1C24] px-6 py-4 text-sm font-black text-white shadow-lg transition hover:bg-red-700 sm:inline-flex">
             + New Project
           </Link>
+          {/* One desktop auth button, to the right of New Project */}
+          {loggedIn !== null && (
+            loggedIn ? (
+              <button type="button" onClick={handleSignOut} disabled={signingOut}
+                className="hidden rounded-xl border-2 border-[#ED1C24] px-5 py-3 text-sm font-black text-[#ED1C24] transition hover:bg-red-50 disabled:opacity-50 lg:inline-flex">
+                {signingOut ? "Signing Out..." : "Log Out"}
+              </button>
+            ) : (
+              <Link href="/login"
+                className="hidden rounded-xl border-2 border-[#ED1C24] px-5 py-3 text-sm font-black text-[#ED1C24] transition hover:bg-red-50 lg:inline-flex">
+                Log In
+              </Link>
+            )
+          )}
           <button type="button" onClick={() => setMenuOpen(!menuOpen)}
             aria-label={menuOpen ? "Close navigation" : "Open navigation"}
             aria-expanded={menuOpen}
@@ -310,6 +364,19 @@ export default function WalkthroughPage() {
                 {item.label}
               </Link>
             ))}
+            {loggedIn !== null && (
+              loggedIn ? (
+                <button type="button" onClick={handleSignOut} disabled={signingOut}
+                  className="mt-3 block w-full rounded-xl bg-[#ED1C24] px-4 py-4 text-left font-black text-white disabled:opacity-50">
+                  {signingOut ? "Signing Out..." : "Log Out"}
+                </button>
+              ) : (
+                <Link href="/login" onClick={() => setMenuOpen(false)}
+                  className="mt-3 block rounded-xl bg-[#ED1C24] px-4 py-4 font-black text-white">
+                  Log In
+                </Link>
+              )
+            )}
           </nav>
         )}
       </header>

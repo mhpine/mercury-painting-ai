@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { supabase } from "./lib/supabase";
 
 type Project = {
   id: string;
@@ -71,6 +73,10 @@ const actions = [
 ];
 
 export default function Home() {
+  const router = useRouter();
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+  const [authError, setAuthError] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -84,6 +90,42 @@ export default function Home() {
       setProjects([]);
     }
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) setAuthError(error.message);
+      setSignedIn(Boolean(data.session));
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        if (mounted) setSignedIn(Boolean(session));
+      }
+    );
+
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    setAuthError("");
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      setAuthError(error.message);
+      setSigningOut(false);
+      return;
+    }
+    setMenuOpen(false);
+    setSignedIn(false);
+    router.replace("/login");
+    router.refresh();
+  }
 
   const totalProjects = projects.length;
 
@@ -178,6 +220,27 @@ export default function Home() {
             + New Project
           </Link>
 
+          {/* DESKTOP AUTHENTICATION */}
+          <div className="hidden lg:flex lg:items-center">
+            {signedIn === false ? (
+              <Link
+                href="/login"
+                className="rounded-xl border-2 border-[#ED1C24] px-5 py-3 text-sm font-black text-[#ED1C24] transition hover:bg-red-50"
+              >
+                Log In
+              </Link>
+            ) : signedIn === true ? (
+              <button
+                type="button"
+                onClick={handleSignOut}
+                disabled={signingOut}
+                className="rounded-xl border-2 border-[#ED1C24] px-5 py-3 text-sm font-black text-[#ED1C24] transition hover:bg-red-50 disabled:opacity-50"
+              >
+                {signingOut ? "Signing Out..." : "Log Out"}
+              </button>
+            ) : null}
+          </div>
+
           {/* MOBILE MENU BUTTON */}
           <button
             type="button"
@@ -207,7 +270,30 @@ export default function Home() {
                 {item.label}
               </Link>
             ))}
+            {signedIn === false ? (
+              <Link
+                href="/login"
+                onClick={() => setMenuOpen(false)}
+                className="mt-2 block rounded-xl bg-[#ED1C24] px-4 py-4 text-center font-black text-white"
+              >
+                Log In
+              </Link>
+            ) : signedIn === true ? (
+              <button
+                type="button"
+                onClick={handleSignOut}
+                disabled={signingOut}
+                className="mt-2 block w-full rounded-xl bg-[#ED1C24] px-4 py-4 text-center font-black text-white disabled:opacity-50"
+              >
+                {signingOut ? "Signing Out..." : "Log Out"}
+              </button>
+            ) : null}
           </nav>
+        )}
+        {authError && (
+          <p role="alert" className="mx-auto max-w-7xl px-5 py-2 text-sm font-bold text-[#ED1C24]">
+            {authError}
+          </p>
         )}
       </header>
 

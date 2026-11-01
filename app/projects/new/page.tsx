@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "../../lib/supabase";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -17,6 +18,36 @@ export default function NewProjectPage() {
 
   const [saving, setSaving] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (active) setLoggedIn(Boolean(data.session));
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (active) setLoggedIn(Boolean(session));
+    });
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleLogout() {
+    setSigningOut(true);
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      alert(error.message);
+      setSigningOut(false);
+      return;
+    }
+    setLoggedIn(false);
+    setMenuOpen(false);
+    router.replace("/login");
+    router.refresh();
+  }
 
   const [form, setForm] = useState({
     customerName: "",
@@ -43,24 +74,57 @@ export default function NewProjectPage() {
     }));
   }
 
-  function createProject(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  
+async function createProject(
+  event: React.FormEvent<HTMLFormElement>
+) {
+  event.preventDefault();
 
-    if (!form.customerName.trim() || !form.address.trim()) {
-      alert("Please enter the customer name and project address.");
+  if (saving) return;
+
+  if (!form.customerName.trim() || !form.address.trim()) {
+    alert("Please enter the customer name and project address.");
+    return;
+  }
+
+  setSaving(true);
+
+  try {
+    const { data: userData, error: authError } =
+      await supabase.auth.getUser();
+
+    if (authError || !userData.user) {
+      alert("Your session has expired. Please log in again.");
+      router.replace("/login");
       return;
     }
 
-    setSaving(true);
+    const project = {
+      ...form,
+      id: crypto.randomUUID(),
+      status: "Draft",
+      createdAt: new Date().toISOString(),
+    };
 
+    const { error: insertError } = await supabase
+      .from("mercury_projects")
+      .insert({
+        id: project.id,
+        owner_id: userData.user.id,
+        name: `${form.customerName.trim()} - ${form.address.trim()}`,
+        customer_name: form.customerName.trim(),
+        address: form.address.trim(),
+        status: project.status,
+        project_data: project,
+      });
+
+    if (insertError) {
+      throw insertError;
+    }
+
+    // Keep a local copy for existing pages.
+    // Supabase remains the primary saved record.
     try {
-      const project = {
-        ...form,
-        id: crypto.randomUUID(),
-        status: "Draft",
-        createdAt: new Date().toISOString(),
-      };
-
       const saved = JSON.parse(
         localStorage.getItem("mercury_projects") || "[]"
       );
@@ -69,19 +133,34 @@ export default function NewProjectPage() {
 
       localStorage.setItem(
         "mercury_projects",
-        JSON.stringify([project, ...projects])
+        JSON.stringify([
+          project,
+          ...projects.filter(
+            (item) => item?.id !== project.id
+          ),
+        ])
       );
-
-      alert("Project created successfully!");
-
-      router.push("/projects");
-    } catch (error) {
-      console.error("Unable to save project:", error);
-      alert("Unable to save project. Please try again.");
-    } finally {
-      setSaving(false);
+    } catch (cacheError) {
+      console.warn(
+        "Project saved online, but local cache update failed:",
+        cacheError
+      );
     }
+
+    alert("Project saved to Supabase successfully!");
+    router.push("/projects");
+  } catch (error) {
+    console.error("Unable to save project:", error);
+
+    alert(
+      error instanceof Error
+        ? `Unable to save project: ${error.message}`
+        : "Unable to save project. Please try again."
+    );
+  } finally {
+    setSaving(false);
   }
+}
 
   const inputStyle =
     "w-full rounded-xl border border-gray-200 bg-[#F7F8FA] px-4 py-4 text-[#252525] outline-none transition focus:border-[#ED1C24] focus:ring-2 focus:ring-red-100";
@@ -152,6 +231,27 @@ export default function NewProjectPage() {
             + New Project
           </Link>
 
+          {/* DESKTOP AUTHENTICATION — RIGHT SIDE ONLY */}
+          {loggedIn !== null && (
+            loggedIn ? (
+              <button
+                type="button"
+                onClick={handleLogout}
+                disabled={signingOut}
+                className="hidden rounded-xl border border-[#ED1C24] px-5 py-3 text-sm font-black text-[#ED1C24] transition hover:bg-red-50 disabled:opacity-50 lg:inline-flex"
+              >
+                {signingOut ? "Signing Out..." : "Log Out"}
+              </button>
+            ) : (
+              <Link
+                href="/login"
+                className="hidden rounded-xl border border-[#ED1C24] px-5 py-3 text-sm font-black text-[#ED1C24] transition hover:bg-red-50 lg:inline-flex"
+              >
+                Log In
+              </Link>
+            )
+          )}
+
           {/* MOBILE MENU BUTTON */}
           <button
             type="button"
@@ -183,6 +283,26 @@ export default function NewProjectPage() {
                 {item.label}
               </Link>
             ))}
+            {loggedIn !== null && (
+              loggedIn ? (
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  disabled={signingOut}
+                  className="mt-2 block w-full rounded-xl bg-[#ED1C24] px-4 py-4 text-left font-bold text-white disabled:opacity-50"
+                >
+                  {signingOut ? "Signing Out..." : "Log Out"}
+                </button>
+              ) : (
+                <Link
+                  href="/login"
+                  onClick={() => setMenuOpen(false)}
+                  className="mt-2 block rounded-xl bg-[#ED1C24] px-4 py-4 font-bold text-white"
+                >
+                  Log In
+                </Link>
+              )
+            )}
           </nav>
         )}
       </header>
