@@ -2,7 +2,6 @@
 "use client";
 
 import { useState, type CSSProperties, type FormEvent } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 
@@ -11,11 +10,28 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"login" | "signup">("login");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [recoveryMode, setRecoveryMode] = useState(false);
+
+  async function handleRecovery(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setLoading(true);
+    setMessage("");
+    try {
+      const redirectTo = `${window.location.origin}/reset-password`;
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo,
+      });
+      if (error) throw error;
+      setMessage("If this email has an account, a password reset link has been sent. Check your inbox and spam folder.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to send recovery email.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -23,34 +39,13 @@ export default function LoginPage() {
     setMessage("");
 
     try {
-      if (mode === "signup") {
-        const { data, error } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-        });
-
-        if (error) throw error;
-
-        if (data.session) {
-          setMessage("Account created successfully.");
-          router.push("/");
-          router.refresh();
-        } else {
-          setMessage(
-            "Check your email for a confirmation link before signing in."
-          );
-        }
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password,
-        });
-
-        if (error) throw error;
-
-        router.push("/");
-        router.refresh();
-      }
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (error) throw error;
+      router.push("/");
+      router.refresh();
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -74,7 +69,7 @@ export default function LoginPage() {
           </span>
 
           <h1 style={styles.heading}>
-            EMPLOYEE <span style={styles.redText}>PORTAL</span>
+            MERCURY <span style={styles.redText}>PORTAL</span>
           </h1>
 
           <p style={styles.subtitle}>
@@ -90,18 +85,18 @@ export default function LoginPage() {
             
 
             <h2 style={styles.cardTitle}>
-              {mode === "login"
-                ? "Employee Sign In"
-                : "Create Employee Account"}
+              {recoveryMode
+                ? "Reset Your Password"
+                : "Administrator & Employee Sign In"}
             </h2>
 
             <p style={styles.cardDescription}>
-              {mode === "login"
-                ? "Sign in to access the Mercury Painting AI Estimator."
-                : "Enter your information to create an account."}
+              {recoveryMode
+                ? "Enter your account email and we'll send a password-reset link."
+                : "Sign in to access the Mercury Painting AI Estimator."}
             </p>
 
-            <form onSubmit={handleSubmit}>
+            <form onSubmit={recoveryMode ? handleRecovery : handleSubmit}>
               <label htmlFor="email" style={styles.label}>
                 Email Address
               </label>
@@ -117,7 +112,7 @@ export default function LoginPage() {
                 style={styles.input}
               />
 
-              <label htmlFor="password" style={styles.label}>
+              {!recoveryMode && <><label htmlFor="password" style={styles.label}>
                 Password
               </label>
 
@@ -128,11 +123,7 @@ export default function LoginPage() {
                   placeholder="Enter your password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  autoComplete={
-                    mode === "login"
-                      ? "current-password"
-                      : "new-password"
-                  }
+                  autoComplete="current-password"
                   minLength={6}
                   required
                   style={styles.passwordInput}
@@ -150,6 +141,8 @@ export default function LoginPage() {
                 </button>
               </div>
 
+              </>}
+
               <button
                 type="submit"
                 disabled={loading}
@@ -158,11 +151,7 @@ export default function LoginPage() {
                   opacity: loading ? 0.65 : 1,
                 }}
               >
-                {loading
-                  ? "Please wait..."
-                  : mode === "login"
-                  ? "SIGN IN"
-                  : "CREATE ACCOUNT"}
+                {loading ? "Please wait..." : recoveryMode ? "SEND RESET LINK" : "SIGN IN"}
               </button>
             </form>
 
@@ -173,24 +162,16 @@ export default function LoginPage() {
             )}
 
             <div style={styles.switchSection}>
-              <span style={styles.switchText}>
-                {mode === "login"
-                  ? "Need an employee account?"
-                  : "Already have an account?"}
-              </span>
-
               <button
                 type="button"
-                onClick={() => {
-                  setMode(mode === "login" ? "signup" : "login");
-                  setMessage("");
-                }}
+                onClick={() => { setRecoveryMode(!recoveryMode); setMessage(""); }}
                 style={styles.switchButton}
               >
-                {mode === "login"
-                  ? "Create Employee Account"
-                  : "Sign In Instead"}
+                {recoveryMode ? "Back to Sign In" : "Forgot Password?"}
               </button>
+              <span style={styles.switchText}>
+                New employees must be invited by an administrator.
+              </span>
             </div>
           </div>
         </div>

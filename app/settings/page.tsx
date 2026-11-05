@@ -15,6 +15,13 @@ type Rates = {
   markupPercent: number;
 };
 
+type Employee = {
+  user_id: string;
+  role: "admin" | "employee";
+  status: "pending" | "approved" | "disabled";
+  created_at: string;
+};
+
 const STORAGE_KEY = "mercury_estimate_rates";
 
 const DEFAULT_RATES: Rates = {
@@ -93,6 +100,13 @@ export default function SettingsPage() {
   const [loaded, setLoaded] = useState(false);
   const [message, setMessage] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [employeeLoading, setEmployeeLoading] = useState(true);
+  const [employeeError, setEmployeeError] = useState("");
+  const [employeeMessage, setEmployeeMessage] = useState("");
+  const [updatingEmployee, setUpdatingEmployee] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -142,6 +156,90 @@ export default function SettingsPage() {
       authListener.subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadEmployees() {
+      setEmployeeLoading(true);
+      setEmployeeError("");
+
+      const { data: userResult, error: userError } = await supabase.auth.getUser();
+      if (!active) return;
+      if (userError || !userResult.user) {
+        setIsAdmin(false);
+        setEmployeeLoading(false);
+        return;
+      }
+
+      setCurrentUserId(userResult.user.id);
+      const { data: adminResult, error: adminError } = await supabase.rpc(
+        "mercury_is_admin"
+      );
+      if (!active) return;
+      if (adminError) {
+        setEmployeeError(`Unable to check administrator access: ${adminError.message}`);
+        setEmployeeLoading(false);
+        return;
+      }
+
+      if (adminResult !== true) {
+        setIsAdmin(false);
+        setEmployeeLoading(false);
+        return;
+      }
+
+      setIsAdmin(true);
+      const { data, error } = await supabase
+        .from("mercury_employees")
+        .select("user_id, role, status, created_at")
+        .order("created_at", { ascending: false });
+      if (!active) return;
+      if (error) {
+        setEmployeeError(`Unable to load employees: ${error.message}`);
+      } else {
+        setEmployees((data ?? []) as Employee[]);
+      }
+      setEmployeeLoading(false);
+    }
+
+    void loadEmployees();
+    return () => { active = false; };
+  }, []);
+
+  async function changeEmployeeStatus(employee: Employee, nextStatus: Employee["status"]) {
+    if (!isAdmin || updatingEmployee || employee.role !== "employee") return;
+    if (employee.user_id === currentUserId) return;
+    if (!window.confirm(`Change this employee's status to ${nextStatus}?`)) return;
+
+    setUpdatingEmployee(employee.user_id);
+    setEmployeeError("");
+    setEmployeeMessage("");
+
+    const { error } = await supabase.rpc("mercury_set_employee_status", {
+      target_user_id: employee.user_id,
+      new_status: nextStatus,
+    });
+
+    if (error) {
+      setEmployeeError(`Unable to update employee: ${error.message}`);
+      setUpdatingEmployee(null);
+      return;
+    }
+
+    const { data, error: reloadError } = await supabase
+      .from("mercury_employees")
+      .select("user_id, role, status, created_at")
+      .order("created_at", { ascending: false });
+
+    if (reloadError) {
+      setEmployeeError(`Status changed, but unable to refresh list: ${reloadError.message}`);
+    } else {
+      setEmployees((data ?? []) as Employee[]);
+      setEmployeeMessage("Employee status updated successfully.");
+    }
+    setUpdatingEmployee(null);
+  }
 
   async function handleLogout() {
     if (signingOut) return;
@@ -530,6 +628,65 @@ export default function SettingsPage() {
             </div>
           </div>
         </section>
+
+        {/* ADMINISTRATOR-ONLY EMPLOYEE MANAGEMENT */}
+        {isAdmin && (
+          <section className="mt-8 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-md">
+            <div className="border-b border-gray-100 px-6 py-6">
+              <div className="flex items-center gap-4">
+                <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-yellow-100 text-3xl">👥</div>
+                <div>
+                  <h2 className="text-xl font-black sm:text-2xl">Employee Management</h2>
+                  <p className="mt-1 text-sm text-gray-500">Administrator only — approve, disable, or reactivate employee accounts.</p>
+                </div>
+              </div>
+            </div>
+            <div className="p-6">
+              <p className="mb-5 text-sm leading-6 text-gray-600">
+                Employee accounts must first be invited or created through Supabase Authentication.
+                Only accounts registered in the Mercury employee table appear here.
+              </p>
+              {employeeError && <p role="alert" className="mb-4 rounded-xl bg-red-50 p-4 text-sm font-bold text-red-700">{employeeError}</p>}
+              {employeeMessage && <p role="status" className="mb-4 rounded-xl bg-green-50 p-4 text-sm font-bold text-green-800">{employeeMessage}</p>}
+              {employeeLoading ? (
+                <p className="text-sm text-gray-500">Loading employee accounts...</p>
+              ) : employees.length === 0 ? (
+                <p className="text-sm text-gray-500">No employee records found.</p>
+              ) : (
+                <div className="space-y-4">
+                  {employees.map((employee) => (
+                    <div key={employee.user_id} className="flex flex-col gap-4 rounded-xl border border-gray-200 bg-[#FAFAFA] p-5 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="min-w-0">
+                        <p className="text-sm font-black">{employee.role === "admin" ? "Administrator" : "Employee"}</p>
+                        <p className="mt-1 break-all font-mono text-xs text-gray-500">{employee.user_id}</p>
+                        <p className="mt-2 text-sm font-bold capitalize">Status: <span className={employee.status === "approved" ? "text-green-700" : employee.status === "disabled" ? "text-red-700" : "text-amber-700"}>{employee.status}</span></p>
+                      </div>
+                      {employee.role === "employee" && employee.user_id !== currentUserId && (
+                        <div className="flex flex-wrap gap-2">
+                          {employee.status !== "approved" && (
+                            <button type="button" disabled={Boolean(updatingEmployee)} onClick={() => void changeEmployeeStatus(employee, "approved")} className="rounded-lg bg-green-700 px-4 py-3 text-sm font-black text-white hover:bg-green-800 disabled:opacity-50">
+                              {updatingEmployee === employee.user_id ? "Updating..." : "Approve"}
+                            </button>
+                          )}
+                          {employee.status !== "disabled" && (
+                            <button type="button" disabled={Boolean(updatingEmployee)} onClick={() => void changeEmployeeStatus(employee, "disabled")} className="rounded-lg bg-[#ED1C24] px-4 py-3 text-sm font-black text-white hover:bg-red-700 disabled:opacity-50">
+                              {updatingEmployee === employee.user_id ? "Updating..." : "Disable"}
+                            </button>
+                          )}
+                          {employee.status !== "pending" && (
+                            <button type="button" disabled={Boolean(updatingEmployee)} onClick={() => void changeEmployeeStatus(employee, "pending")} className="rounded-lg border border-gray-300 px-4 py-3 text-sm font-black hover:bg-gray-100 disabled:opacity-50">
+                              Set Pending
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         {/* IMPORTANT NOTICE */}
         <div className="mt-8 rounded-2xl border border-yellow-200 bg-yellow-50 p-6">

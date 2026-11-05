@@ -24,7 +24,11 @@ type Surface = {
   coats: number;
   condition: string;
   preparation: string;
+  notes?: string;
+  photoPath?: string;
 };
+
+type ProjectPhoto = { path: string; url: string };
 
 type Walkthrough = {
   projectId: string;
@@ -102,51 +106,126 @@ export default function EstimatesPage() {
   const [walkthroughs, setWalkthroughs] = useState<Walkthrough[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [rates, setRates] = useState<Rates>(DEFAULT_RATES);
+  const [ratesByProject, setRatesByProject] = useState<Record<string, Rates>>({});
+  const [savingRates, setSavingRates] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [message, setMessage] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [editableIds, setEditableIds] = useState<string[]>([]);
+  const [loadError, setLoadError] = useState("");
+  const [projectPhotos, setProjectPhotos] = useState<ProjectPhoto[]>([]);
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const [photoError, setPhotoError] = useState("");
+  const [preparingPrint, setPreparingPrint] = useState(false);
 
   useEffect(() => {
-    try {
-      const savedProjects = JSON.parse(
-        localStorage.getItem("mercury_projects") || "[]"
-      );
-
-      const savedWalkthroughs = JSON.parse(
-        localStorage.getItem("mercury_walkthroughs") || "[]"
-      );
-
-      const savedRates = JSON.parse(
-        localStorage.getItem("mercury_estimate_rates") || "null"
-      );
-
-      const projectList: Project[] = Array.isArray(savedProjects)
-        ? savedProjects
-        : [];
-
-      setProjects(projectList);
-
-      setWalkthroughs(
-        Array.isArray(savedWalkthroughs) ? savedWalkthroughs : []
-      );
-
-      if (savedRates && typeof savedRates === "object") {
-        setRates({
-          ...DEFAULT_RATES,
-          ...savedRates,
+    let active = true;
+    async function loadEstimateData() {
+      setLoaded(false);
+      try {
+        const { data: userResult, error: authError } = await supabase.auth.getUser();
+        if (authError || !userResult.user) throw new Error("Please sign in.");
+        const userId = userResult.user.id;
+        const { data: employee, error: employeeError } = await supabase
+          .from("mercury_employees").select("role, status").eq("user_id", userId).single();
+        if (employeeError || employee?.status !== "approved") throw new Error("Employee access not approved.");
+        const admin = employee.role === "admin";
+        const [projectResult, shareResult] = await Promise.all([
+          supabase.from("mercury_projects").select("id, owner_id, name, customer_name, address, project_data"),
+          admin ? Promise.resolve({ data: [] as {project_id:string;permission:string}[], error: null }) :
+            supabase.from("mercury_project_shares").select("project_id, permission").eq("shared_with", userId),
+        ]);
+        if (projectResult.error) throw projectResult.error;
+        if (shareResult.error) throw shareResult.error;
+        const permissions = new Map((shareResult.data ?? []).map((row) => [row.project_id, row.permission]));
+        const rows = (projectResult.data ?? []).filter((row) =>
+          admin ? row.owner_id === userId : permissions.has(row.id)
+        );
+        const projectList: Project[] = rows.map((row) => {
+          const details = row.project_data && typeof row.project_data === "object" && !Array.isArray(row.project_data)
+            ? row.project_data as Partial<Project> : {};
+          return { ...details, id: row.id, customerName: row.customer_name || details.customerName || row.name || "",
+            address: row.address || details.address || "" };
         });
-      }
-
-      if (projectList.length > 0) {
-        setSelectedId(projectList[0].id);
-      }
-    } catch (error) {
-      console.error("Unable to load estimate data:", error);
-    } finally {
-      setLoaded(true);
+        const editable = admin ? projectList.map((item) => item.id) :
+          projectList.filter((item) => permissions.get(item.id) === "edit").map((item) => item.id);
+        const ids = projectList.map((item) => item.id);
+        const { data: walkRows, error: walkError } = ids.length
+          ? await supabase.from("mercury_walkthroughs").select("project_id, walkthrough_data").in("project_id", ids)
+          : { data: [], error: null };
+        if (walkError) throw walkError;
+        const walkList: Walkthrough[] = (walkRows ?? []).map((row) => {
+          const content = row.walkthrough_data && typeof row.walkthrough_data === "object" && !Array.isArray(row.walkthrough_data)
+            ? row.walkthrough_data as { surfaces?: Surface[] } : {};
+          return { projectId: row.project_id, surfaces: Array.isArray(content.surfaces) ? content.surfaces : [] };
+        });
+        const { data: rateRows, error: rateError } = ids.length
+          ? await supabase.from("mercury_estimate_rates")
+              .select("project_id, coverage, paint_price, labor_rate, prep_rate, waste_percent, markup_percent")
+              .in("project_id", ids)
+          : { data: [], error: null };
+        if (rateError) throw rateError;
+        const projectRates: Record<string, Rates> = {};
+        for (const row of rateRows ?? []) {
+          projectRates[row.project_id] = {
+            coverage: Number(row.coverage), paintPrice: Number(row.paint_price),
+            laborRate: Number(row.labor_rate), prepRate: Number(row.prep_rate),
+            wastePercent: Number(row.waste_percent), markupPercent: Number(row.markup_percent),
+          };
+        }
+        const requestedId = new URLSearchParams(window.location.search).get("projectId");
+        const initialId = requestedId && ids.includes(requestedId) ? requestedId : ids[0] || "";
+        if (active) {
+          setIsAdmin(admin);
+          setEditableIds(editable);
+          setProjects(projectList);
+          setWalkthroughs(walkList);
+          setRatesByProject(projectRates);
+          setSelectedId(initialId);
+          setRates(projectRates[initialId] ?? { ...DEFAULT_RATES });
+        }
+      } catch (error) {
+        console.error("Unable to load estimates:", error);
+        if (active) { setProjects([]); setWalkthroughs([]); setLoadError(error instanceof Error ? error.message : "Unable to load estimates."); }
+      } finally { if (active) setLoaded(true); }
     }
+    void loadEstimateData();
+    return () => { active = false; };
   }, []);
 
+  // List photos from the private bucket for the selected project only.
+  // Signed URLs are short-lived and must never be stored in the database.
+  useEffect(() => {
+    let active = true;
+    async function loadProjectPhotos() {
+      setProjectPhotos([]);
+      setPhotoError("");
+      if (!selectedId) return;
+      setPhotoLoading(true);
+      try {
+        const bucket = supabase.storage.from("mercury-project-photos");
+        const { data, error } = await bucket.list(selectedId, { limit: 100, sortBy: { column: "created_at", order: "asc" } });
+        if (error) throw error;
+        const paths = (data ?? [])
+          .filter((item) => item.name && /\.(jpe?g|png|webp)$/i.test(item.name))
+          .map((item) => `${selectedId}/${item.name}`);
+        if (paths.length) {
+          const { data: urls, error: urlError } = await bucket.createSignedUrls(paths, 3600);
+          if (urlError) throw urlError;
+          if (active) setProjectPhotos((urls ?? []).filter((item) => item.signedUrl).map((item) => ({ path: item.path ?? "", url: item.signedUrl! })));
+        }
+      } catch (error) {
+        if (active) setPhotoError(error instanceof Error ? error.message : "Unable to load project photos.");
+      } finally {
+        if (active) setPhotoLoading(false);
+      }
+    }
+    void loadProjectPhotos();
+    return () => { active = false; };
+  }, [selectedId]);
+
   const project = projects.find((item) => item.id === selectedId);
+  const canEdit = editableIds.includes(selectedId);
 
   const walkthrough = walkthroughs.find(
     (item) => item.projectId === selectedId
@@ -209,23 +288,46 @@ export default function EstimatesPage() {
     setMessage("");
   }
 
-  function saveRates() {
+  async function saveRates() {
+    if (!isAdmin || !selectedId || savingRates) return;
+    setSavingRates(true);
+    setMessage("");
     try {
-      localStorage.setItem(
-        "mercury_estimate_rates",
-        JSON.stringify(rates)
-      );
-
-      setMessage("Estimating rates saved successfully.");
-    } catch {
-      setMessage("Unable to save estimating rates.");
+      const { error } = await supabase.from("mercury_estimate_rates").upsert({
+        project_id: selectedId,
+        coverage: rates.coverage,
+        paint_price: rates.paintPrice,
+        labor_rate: rates.laborRate,
+        prep_rate: rates.prepRate,
+        waste_percent: rates.wastePercent,
+        markup_percent: rates.markupPercent,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "project_id" });
+      if (error) throw error;
+      setRatesByProject((previous) => ({ ...previous, [selectedId]: { ...rates } }));
+      setMessage("Pricing saved to this project in Supabase.");
+    } catch (error) {
+      console.error("Unable to save project pricing:", error);
+      setMessage(error instanceof Error ? `Unable to save pricing: ${error.message}` : "Unable to save pricing.");
+    } finally {
+      setSavingRates(false);
     }
   }
 
-  function printEstimate() {
-    if (!project || surfaces.length === 0) return;
-
-    window.print();
+  async function printEstimate() {
+    if (!project || surfaces.length === 0 || preparingPrint) return;
+    setPreparingPrint(true);
+    try {
+      // Wait for images to finish loading so browser PDF output includes them.
+      const images = Array.from(document.querySelectorAll<HTMLImageElement>("#printable-estimate img"));
+      await Promise.all(images.map((img) => img.complete ? Promise.resolve() : new Promise<void>((resolve) => {
+        img.addEventListener("load", () => resolve(), { once: true });
+        img.addEventListener("error", () => resolve(), { once: true });
+      })));
+      window.print();
+    } finally {
+      setPreparingPrint(false);
+    }
   }
 
   const inputStyle =
@@ -261,7 +363,7 @@ export default function EstimatesPage() {
           </Link>
 
           <nav className="hidden items-center gap-8 lg:flex">
-            {navigation.map((item) => (
+            {navigation.filter((item) => isAdmin || item.href !== "/settings").map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
@@ -276,12 +378,12 @@ export default function EstimatesPage() {
             ))}
           </nav>
 
-          <Link
+          {isAdmin && <Link
             href="/projects/new"
             className="hidden rounded-xl bg-[#ED1C24] px-6 py-4 text-sm font-black text-white shadow-lg hover:bg-red-700 sm:inline-flex"
           >
             + New Project
-          </Link>
+          </Link>}
 
           <div className="hidden lg:flex">
             {loggedIn === true ? (
@@ -310,9 +412,9 @@ export default function EstimatesPage() {
         {menuOpen && (
           <nav className="absolute left-0 right-0 top-full border-t border-gray-200 bg-white p-5 shadow-xl lg:hidden">
             {[
-              ...navigation,
-              { label: "AI Walkthrough", href: "/walkthrough" },
-              { label: "New Project", href: "/projects/new" },
+              ...navigation.filter((item) => isAdmin || item.href !== "/settings"),
+              ...(canEdit ? [{ label: "AI Walkthrough", href: `/walkthrough?projectId=${selectedId}` }] : []),
+              ...(isAdmin ? [{ label: "New Project", href: "/projects/new" }] : []),
             ].map((item) => (
               <Link
                 key={item.href}
@@ -373,6 +475,7 @@ export default function EstimatesPage() {
             Choose a project with recorded walkthrough measurements.
           </p>
 
+          {loadError && <p role="alert" className="mt-4 text-red-700">{loadError}</p>}
           {!loaded ? (
             <p className="mt-5 text-gray-500">Loading projects...</p>
           ) : projects.length === 0 ? (
@@ -381,18 +484,21 @@ export default function EstimatesPage() {
                 No projects have been created yet.
               </p>
 
-              <Link
+              {isAdmin && <Link
                 href="/projects/new"
                 className="mt-4 inline-flex rounded-xl bg-[#ED1C24] px-5 py-3 font-black text-white"
               >
                 + Create Project
-              </Link>
+              </Link>}
             </div>
           ) : (
             <select
               value={selectedId}
+              disabled={savingRates}
               onChange={(event) => {
-                setSelectedId(event.target.value);
+                const nextId = event.target.value;
+                setSelectedId(nextId);
+                setRates(ratesByProject[nextId] ?? { ...DEFAULT_RATES });
                 setMessage("");
               }}
               className={`${inputStyle} mt-5`}
@@ -452,8 +558,9 @@ export default function EstimatesPage() {
                   ⚙️ Estimating Rates
                 </h2>
                 <p className="mt-2 text-sm text-gray-500">
-                  Adjust these preliminary rates to match Mercury
-                  Painting&apos;s actual pricing.
+                  {isAdmin
+                    ? "Set pricing for this project. Only administrators can change these rates."
+                    : "Project pricing is controlled by the administrator."}
                 </p>
               </div>
 
@@ -499,6 +606,7 @@ export default function EstimatesPage() {
                       min="0"
                       step="0.01"
                       value={rates[field.name as keyof Rates]}
+                      disabled={!isAdmin}
                       onChange={(event) =>
                         updateRate(
                           field.name as keyof Rates,
@@ -512,13 +620,14 @@ export default function EstimatesPage() {
               </div>
 
               <div className="border-t border-gray-100 px-6 py-5">
-                <button
+                {isAdmin && <button
                   type="button"
                   onClick={saveRates}
-                  className="rounded-xl bg-[#ED1C24] px-6 py-4 font-black text-white hover:bg-red-700"
+                  disabled={savingRates}
+                  className="rounded-xl bg-[#ED1C24] px-6 py-4 font-black text-white hover:bg-red-700 disabled:opacity-50"
                 >
-                  SAVE ESTIMATING RATES
-                </button>
+                  {savingRates ? "SAVING..." : "SAVE PROJECT PRICING"}
+                </button>}
 
                 {message && (
                   <p role="status" className="mt-3 text-sm font-bold">
@@ -666,83 +775,85 @@ export default function EstimatesPage() {
                         an estimate.
                       </p>
 
-                      <Link
-                        href="/walkthrough"
+                      {canEdit && <Link
+                        href={`/walkthrough?projectId=${selectedId}`}
                         className="mt-4 inline-flex rounded-xl bg-[#ED1C24] px-5 py-3 font-black text-white"
                       >
                         START WALKTHROUGH →
-                      </Link>
+                      </Link>}
                     </div>
                   )}
                 </div>
 
-                {/* COST BREAKDOWN */}
-                {surfaces.length > 0 && (
-                  <div className="mt-10">
+                                 {/* CUSTOMER PRICE: no internal rates, costs, or markup in print */}
+                 {surfaces.length > 0 && (
+                   <div className="mt-10">
+                     <h3 className="text-xl font-black uppercase">Estimated Project Price</h3>
+                     <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-xl bg-[#252525] p-6 text-white">
+                       <p className="text-xl font-black">TOTAL ESTIMATED PRICE</p>
+                       <p className="text-3xl font-black text-[#FFD400]">{money(total)}</p>
+                     </div>
+                     <p className="mt-5 text-xs leading-6 text-gray-500">
+                       Preliminary estimate based on recorded measurements and site observations.
+                       Final pricing is subject to confirmation of conditions, materials, access, taxes, and fees.
+                     </p>
+                   </div>
+                 )}
 
-                    <h3 className="text-xl font-black uppercase">
-                      Estimated Project Costs
-                    </h3>
+                 {/* Customer-facing project documentation from private Storage */}
+                 <div className="mt-10">
+                   <h3 className="text-xl font-black uppercase">Project Photos</h3>
+                   {photoLoading && <p className="mt-3 text-sm text-gray-500">Loading project photos...</p>}
+                   {photoError && <p className="no-print mt-3 text-sm text-red-700">Unable to load photos: {photoError}</p>}
+                   {!photoLoading && !photoError && projectPhotos.length === 0 && (
+                     <p className="mt-3 text-sm text-gray-500">No project photos available.</p>
+                   )}
+                   {projectPhotos.length > 0 && (
+                     <div className="mt-5 grid grid-cols-2 gap-4">
+                       {projectPhotos.map((item, index) => (
+                         <figure key={item.path || index} className="break-inside-avoid overflow-hidden rounded-xl border border-gray-200">
+                           {/* eslint-disable-next-line @next/next/no-img-element */}
+                           <img src={item.url} alt={`Project photo ${index + 1}`} className="h-52 w-full object-contain" />
+                           <figcaption className="px-3 py-2 text-xs text-gray-500">Project photo {index + 1}</figcaption>
+                         </figure>
+                       ))}
+                     </div>
+                   )}
+                 </div>
 
-                    <div className="mt-5 space-y-4">
-
-                      {[
-                        {
-                          label: `Paint Materials (${gallons} gallons)`,
-                          value: paintCost,
-                        },
-                        {
-                          label: "Painting Labor",
-                          value: laborCost,
-                        },
-                        {
-                          label: "Surface Preparation",
-                          value: preparationCost,
-                        },
-                        {
-                          label: "Subtotal",
-                          value: subtotal,
-                        },
-                        {
-                          label: `Markup (${rates.markupPercent}%)`,
-                          value: markup,
-                        },
-                      ].map((item) => (
-                        <div
-                          key={item.label}
-                          className="flex justify-between gap-4 border-b border-gray-100 pb-3"
-                        >
-                          <span className="text-gray-600">
-                            {item.label}
-                          </span>
-
-                          <span className="font-black">
-                            {money(item.value)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="mt-7 flex flex-wrap items-center justify-between gap-4 rounded-xl bg-[#252525] p-6 text-white">
-                      <p className="text-xl font-black">
-                        TOTAL ESTIMATED PRICE
-                      </p>
-
-                      <p className="text-3xl font-black text-[#FFD400]">
-                        {money(total)}
-                      </p>
-                    </div>
-
-                    <p className="mt-5 text-xs leading-6 text-gray-500">
-                      Preliminary estimate based on recorded measurements
-                      and adjustable pricing assumptions. Final pricing
-                      requires review of site conditions, scope, materials,
-                      access, and applicable taxes or fees.
-                    </p>
-                  </div>
-                )}
+                 {surfaces.some((surface) => /AI photo observations/i.test(surface.notes ?? "")) && (
+                   <div className="mt-10">
+                     <h3 className="text-xl font-black uppercase">Photo Review Observations</h3>
+                     <p className="mt-2 text-xs text-gray-500">AI-assisted observations are preliminary and must be verified on site.</p>
+                     {surfaces.filter((surface) => /AI photo observations/i.test(surface.notes ?? "")).map((surface) => (
+                       <div key={surface.id} className="mt-4 break-inside-avoid rounded-xl border border-gray-200 p-4">
+                         <p className="font-bold">{surface.name}</p>
+                         <p className="mt-2 whitespace-pre-wrap text-sm text-gray-600">{surface.notes}</p>
+                       </div>
+                     ))}
+                   </div>
+                 )}
               </div>
             </section>
+
+            {/* Internal costs are visible to admins on screen, never in the PDF. */}
+            {isAdmin && surfaces.length > 0 && (
+              <section className="no-print mt-8 rounded-2xl border border-gray-200 bg-white p-6 shadow-md">
+                <h3 className="text-xl font-black">Internal Cost Breakdown — Admin Only</h3>
+                <p className="mt-2 text-sm text-gray-500">Not included in the customer PDF.</p>
+                <div className="mt-5 space-y-3 text-sm">
+                  {[
+                    ["Paint materials", paintCost], ["Painting labor", laborCost],
+                    ["Surface preparation", preparationCost], ["Internal subtotal", subtotal],
+                    [`Markup (${rates.markupPercent}%)`, markup], ["Quoted total", total],
+                  ].map(([label, amount]) => (
+                    <div key={String(label)} className="flex justify-between border-b border-gray-100 pb-2">
+                      <span>{label}</span><strong>{money(Number(amount))}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* PRINT BUTTON */}
             {surfaces.length > 0 && (
@@ -750,18 +861,19 @@ export default function EstimatesPage() {
 
                 <button
                   type="button"
-                  onClick={printEstimate}
+                  onClick={() => void printEstimate()}
+                  disabled={preparingPrint || photoLoading}
                   className="rounded-xl bg-[#ED1C24] px-8 py-5 font-black text-white shadow-lg hover:bg-red-700"
                 >
-                  🖨️ PRINT / SAVE AS PDF
+                  {preparingPrint ? "PREPARING PDF..." : "🖨️ PRINT / SAVE AS PDF"}
                 </button>
 
-                <Link
-                  href="/walkthrough"
+                {canEdit && <Link
+                  href={`/walkthrough?projectId=${selectedId}`}
                   className="rounded-xl border-2 border-[#252525] bg-white px-8 py-5 font-black"
                 >
                   ← EDIT WALKTHROUGH
-                </Link>
+                </Link>}
               </div>
             )}
           </>

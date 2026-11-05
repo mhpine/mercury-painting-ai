@@ -8,6 +8,7 @@ import { supabase } from "../lib/supabase";
 
 type Project = {
   id: string;
+  ownerId: string;
   customerName: string;
   address: string;
   projectType?: string;
@@ -36,17 +37,16 @@ type Surface = {
   preparation: string;
   coats: number;
   notes: string;
-  photo?: string;
+  photo?: string; // Legacy embedded photos, kept for backward compatibility.
+  photoPath?: string; // New permanent private Storage location.
 };
 
-type Walkthrough = {
-  projectId: string;
-  surfaces: Surface[];
-  updatedAt: string;
-};
+type ProjectPhoto = { path: string; name: string; url: string; createdAt?: string };
+const PHOTO_BUCKET = "mercury-project-photos";
 
-const STORAGE_KEY = "mercury_walkthroughs";
-const PROJECTS_KEY = "mercury_projects";
+type EmployeeRole = "admin" | "employee";
+type WalkthroughData = { surfaces?: Surface[] };
+
 const navigation = [
   { label: "Dashboard", href: "/" },
   { label: "Projects", href: "/projects" },
@@ -76,6 +76,10 @@ export default function WalkthroughPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+  const [role, setRole] = useState<EmployeeRole | null>(null);
+  const [userId, setUserId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [loadingSurfaces, setLoadingSurfaces] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -119,44 +123,192 @@ export default function WalkthroughPage() {
   const [form, setForm] = useState(blankForm);
   const [openings, setOpenings] = useState<Opening[]>([]);
   const [photo, setPhoto] = useState("");
+  const [photoPath, setPhotoPath] = useState("");
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [projectPhotos, setProjectPhotos] = useState<ProjectPhoto[]>([]);
+  const [loadingPhotos, setLoadingPhotos] = useState(false);
+  const [photoGalleryError, setPhotoGalleryError] = useState("");
+  const [analyzingPhoto, setAnalyzingPhoto] = useState(false);
+  const [photoAnalysis, setPhotoAnalysis] = useState("");
+  const [photoAnalysisError, setPhotoAnalysisError] = useState("");
 
+  // Projects are loaded from Supabase and filtered by project ownership or an edit share.
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(PROJECTS_KEY);
-      const parsed: unknown = raw ? JSON.parse(raw) : [];
-      const list = Array.isArray(parsed) ? (parsed as Project[]) : [];
-      setProjects(list);
-      if (list.length) {
-        const requested = new URLSearchParams(window.location.search).get("projectId");
-        setSelectedProjectId(
-          requested && list.some((p) => p.id === requested) ? requested : list[0].id
-        );
+    let active = true;
+    async function loadProjects() {
+      setLoaded(false);
+      setMessage("");
+      const { data: auth, error: authError } = await supabase.auth.getUser();
+      if (!active) return;
+      if (authError || !auth.user) {
+        setMessage("Please sign in to access walkthroughs.");
+        setLoaded(true);
+        return;
       }
-    } catch (error) {
-      console.error("Could not load projects", error);
-      setMessage("Unable to read projects from this browser.");
-    } finally {
+      setUserId(auth.user.id);
+      const { data: employee, error: employeeError } = await supabase
+        .from("mercury_employees")
+        .select("role, status")
+        .eq("user_id", auth.user.id)
+        .maybeSingle();
+      if (!active) return;
+      if (employeeError || employee?.status !== "approved") {
+        setMessage("Your employee account is not approved.");
+        setLoaded(true);
+        return;
+      }
+      const employeeRole: EmployeeRole = employee.role === "admin" ? "admin" : "employee";
+      setRole(employeeRole);
+      const { data: projectRows, error: projectError } = await supabase
+        .from("mercury_projects")
+        .select("id, owner_id, name, customer_name, address, project_data")
+        .order("name");
+      if (!active) return;
+      if (projectError) {
+        setMessage(`Unable to load projects: ${projectError.message}`);
+        setLoaded(true);
+        return;
+      }
+      let editableIds = new Set<string>();
+      if (employeeRole !== "admin") {
+        const { data: shares, error: shareError } = await supabase
+          .from("mercury_project_shares")
+          .select("project_id")
+          .eq("shared_with", auth.user.id)
+          .eq("permission", "edit");
+        if (!active) return;
+        if (shareError) {
+          setMessage(`Unable to verify project permissions: ${shareError.message}`);
+          setLoaded(true);
+          return;
+        }
+        editableIds = new Set((shares ?? []).map((share) => share.project_id));
+      }
+      const list: Project[] = (projectRows ?? [])
+        .filter((row) => employeeRole === "admin" ? row.owner_id === auth.user.id : editableIds.has(row.id))
+        .map((row) => {
+          const details = row.project_data && typeof row.project_data === "object" && !Array.isArray(row.project_data)
+            ? row.project_data as Record<string, unknown> : {};
+          return {
+            id: row.id,
+            ownerId: row.owner_id,
+            customerName: String(row.customer_name || details.customerName || row.name || "Project"),
+            address: String(row.address || details.address || ""),
+          };
+        });
+      setProjects(list);
+      const requested = new URLSearchParams(window.location.search).get("projectId");
+      setSelectedProjectId(requested && list.some((item) => item.id === requested)
+        ? requested : list[0]?.id ?? "");
       setLoaded(true);
     }
+    void loadProjects();
+    return () => { active = false; };
   }, []);
 
+  // Walkthrough measurements are shared through the secured Supabase table.
   useEffect(() => {
-    if (!selectedProjectId) {
+    let active = true;
+    async function loadWalkthrough() {
       setSurfaces([]);
+      if (!selectedProjectId) return;
+      setLoadingSurfaces(true);
+      const { data, error } = await supabase
+        .from("mercury_walkthroughs")
+        .select("walkthrough_data")
+        .eq("project_id", selectedProjectId)
+        .maybeSingle();
+      if (!active) return;
+      if (error) {
+        setMessage(`Unable to load walkthrough: ${error.message}`);
+      } else {
+        const content = data?.walkthrough_data as WalkthroughData | null;
+        setSurfaces(Array.isArray(content?.surfaces) ? content.surfaces : []);
+      }
+      setLoadingSurfaces(false);
+    }
+    void loadWalkthrough();
+    return () => { active = false; };
+  }, [selectedProjectId]);
+
+  // Project photos are stored separately from surface measurements. They survive
+  // page refreshes, switching devices, and removal of a surface record.
+  useEffect(() => {
+    let active = true;
+    setPhoto("");
+    setPhotoPath("");
+    setPhotoAnalysis("");
+    setPhotoAnalysisError("");
+    setProjectPhotos([]);
+    setPhotoGalleryError("");
+    if (!selectedProjectId) return () => { active = false; };
+
+    async function loadPhotos() {
+      setLoadingPhotos(true);
+      const { data: entries, error } = await supabase.storage
+        .from(PHOTO_BUCKET).list(selectedProjectId, {
+          limit: 1000, sortBy: { column: "created_at", order: "desc" },
+        });
+      if (!active) return;
+      if (error) {
+        setPhotoGalleryError(`Unable to load project photos: ${error.message}`);
+        setLoadingPhotos(false);
+        return;
+      }
+      const files = (entries ?? []).filter((item) =>
+        item.name && /\.(jpg|jpeg|png|webp)$/i.test(item.name)
+      );
+      const paths = files.map((item) => `${selectedProjectId}/${item.name}`);
+      if (!paths.length) {
+        setProjectPhotos([]);
+        setLoadingPhotos(false);
+        return;
+      }
+      const { data: signed, error: signedError } = await supabase.storage
+        .from(PHOTO_BUCKET).createSignedUrls(paths, 3600);
+      if (!active) return;
+      if (signedError) {
+        setPhotoGalleryError(`Unable to display project photos: ${signedError.message}`);
+      } else {
+        setProjectPhotos(files.flatMap((item, i) => {
+          const url = signed?.[i]?.signedUrl;
+          return url ? [{
+            path: paths[i], name: item.name, url,
+            createdAt: item.created_at,
+          }] : [];
+        }));
+      }
+      setLoadingPhotos(false);
+    }
+    void loadPhotos();
+    return () => { active = false; };
+  }, [selectedProjectId]);
+
+  async function refreshProjectPhotos(projectId: string) {
+    const { data: entries, error } = await supabase.storage
+      .from(PHOTO_BUCKET).list(projectId, {
+        limit: 1000, sortBy: { column: "created_at", order: "desc" },
+      });
+    if (error) throw error;
+    const files = (entries ?? []).filter((item) =>
+      item.name && /\.(jpg|jpeg|png|webp)$/i.test(item.name)
+    );
+    const paths = files.map((item) => `${projectId}/${item.name}`);
+    if (!paths.length) {
+      if (selectedProjectId === projectId) setProjectPhotos([]);
       return;
     }
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      const parsed: unknown = raw ? JSON.parse(raw) : [];
-      const list = Array.isArray(parsed) ? (parsed as Walkthrough[]) : [];
-      const saved = list.find((item) => item.projectId === selectedProjectId);
-      setSurfaces(Array.isArray(saved?.surfaces) ? saved.surfaces : []);
-    } catch (error) {
-      console.error("Could not load walkthrough", error);
-      setSurfaces([]);
-      setMessage("Unable to read saved walkthrough.");
+    const { data: signed, error: signedError } = await supabase.storage
+      .from(PHOTO_BUCKET).createSignedUrls(paths, 3600);
+    if (signedError) throw signedError;
+    if (selectedProjectId === projectId) {
+      setProjectPhotos(files.flatMap((item, i) => {
+        const url = signed?.[i]?.signedUrl;
+        return url ? [{ path: paths[i], name: item.name, url,
+          createdAt: item.created_at }] : [];
+      }));
     }
-  }, [selectedProjectId]);
+  }
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
   const totalSquareFeet = surfaces.reduce((sum, s) => sum + s.squareFeet, 0);
@@ -174,26 +326,29 @@ export default function WalkthroughPage() {
   );
   const netArea = Math.max(0, grossArea - deductedArea);
 
-  function saveSurfaces(updated: Surface[]) {
-    if (!selectedProjectId) return false;
+  async function saveSurfaces(updated: Surface[]): Promise<boolean> {
+    const project = projects.find((item) => item.id === selectedProjectId);
+    if (!project || !userId || saving || loadingSurfaces || uploadingPhoto) return false;
+    setSaving(true);
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      const parsed: unknown = raw ? JSON.parse(raw) : [];
-      const list = Array.isArray(parsed) ? (parsed as Walkthrough[]) : [];
-      const next = list.filter((w) => w.projectId !== selectedProjectId);
-      next.push({
-        projectId: selectedProjectId,
-        surfaces: updated,
-        updatedAt: new Date().toISOString(),
-      });
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      // A unique constraint on project_id prevents duplicate walkthrough records.
+      // Database RLS and the ownership trigger enforce project-level access.
+      const { error } = await supabase.from("mercury_walkthroughs").upsert({
+        project_id: project.id,
+        owner_id: project.ownerId,
+        walkthrough_data: { surfaces: updated },
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "project_id" });
+      if (error) throw error;
       setSurfaces(updated);
       setMessage("Walkthrough saved successfully.");
       return true;
     } catch (error) {
-      console.error("Could not save walkthrough", error);
-      setMessage("Unable to save. Browser storage may be full; try a smaller photo.");
+      const detail = error instanceof Error ? error.message : String(error);
+      setMessage(`Unable to save walkthrough: ${detail}`);
       return false;
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -208,10 +363,18 @@ export default function WalkthroughPage() {
     setOpenings((old) => old.map((o) => (o.id === id ? { ...o, ...patch } : o)));
   }
 
-  function addSurface(event: React.FormEvent<HTMLFormElement>) {
+  async function addSurface(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedProjectId) {
       setMessage("Select a project first.");
+      return;
+    }
+    if (uploadingPhoto) {
+      setMessage("Please wait for your photo to finish saving.");
+      return;
+    }
+    if (photo && !photoPath) {
+      setMessage("The photo has not been saved to the project. Please select it again.");
       return;
     }
     const length = Number(form.length);
@@ -255,43 +418,181 @@ export default function WalkthroughPage() {
       preparation: form.preparation,
       coats,
       notes: form.notes.trim(),
-      photo: photo || undefined,
+      photoPath: photoPath || undefined,
     };
-    if (saveSurfaces([...surfaces, surface])) {
+    if (await saveSurfaces([...surfaces, surface])) {
       setForm(blankForm());
       setOpenings([]);
       setPhoto("");
+      setPhotoPath("");
+      setPhotoAnalysis("");
+      setPhotoAnalysisError("");
       const fileInput = document.getElementById("surface-photo") as HTMLInputElement | null;
       if (fileInput) fileInput.value = "";
     }
   }
 
-  function deleteSurface(id: string) {
+  async function deleteSurface(id: string) {
     if (window.confirm("Remove this surface from the walkthrough?")) {
-      saveSurfaces(surfaces.filter((s) => s.id !== id));
+      await saveSurfaces(surfaces.filter((s) => s.id !== id));
     }
   }
 
-  function handlePhoto(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      setMessage("Please choose an image.");
-      return;
+  async function analyzePhoto() {
+    if (!photo || !selectedProjectId || analyzingPhoto || uploadingPhoto || !photoPath) return;
+    setAnalyzingPhoto(true);
+    setPhotoAnalysis("");
+    setPhotoAnalysisError("");
+    try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (sessionError || !token) throw new Error("Please sign in again to analyze a photo.");
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ projectId: selectedProjectId, imageDataUrl: photo }),
+      });
+      const result: { analysis?: string; error?: string } = await response.json();
+      if (!response.ok) throw new Error(result.error || `AI request failed (${response.status}).`);
+      if (!result.analysis?.trim()) throw new Error("The AI returned no analysis. Try another photo.");
+      setPhotoAnalysis(result.analysis);
+    } catch (error) {
+      setPhotoAnalysisError(error instanceof Error ? error.message : "Unable to analyze photo.");
+    } finally {
+      setAnalyzingPhoto(false);
     }
-    if (file.size > 2 * 1024 * 1024) {
-      setMessage("Choose an image under 2 MB.");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        setPhoto(reader.result);
-        setMessage("");
-      }
-    };
-    reader.readAsDataURL(file);
   }
+
+  function applyAiSuggestions() {
+    if (!photoAnalysis.trim()) return;
+    // Read only the AI's existing narrative; do not invent measurements or change saved records.
+    const section = (heading: string) => {
+      const lines = photoAnalysis.split(/\r?\n/);
+      const start = lines.findIndex((line) => line.trim().toLowerCase().replace(/:$/, "") === heading.toLowerCase());
+      if (start < 0) return "";
+      const next = lines.slice(start + 1).findIndex((line) =>
+        /^(surfaces|visible condition|suggested preparation|need to verify):?$/i.test(line.trim()));
+      return lines.slice(start + 1, next < 0 ? undefined : start + 1 + next).join("\n").trim();
+    };
+    const surfaceText = section("Surfaces");
+    const conditionText = section("Visible condition");
+    const preparationText = section("Suggested preparation");
+    const combined = `${conditionText}\n${preparationText}`.toLowerCase();
+    const suggestedCondition = /rot|severe|extensive damage|large cracks|damaged wood/i.test(conditionText)
+      ? "Damaged"
+      : /peel|flak|crack|blister|chipp|heavy wear/i.test(conditionText)
+        ? "Poor"
+        : /minor|some wear|discolor|dirt|stain/i.test(conditionText)
+          ? "Fair"
+          : null;
+    const prepMatches = [
+      ["Cleaning", /clean|wash|dirt|debris|pressure wash/],
+      ["Sanding", /sand/],
+      ["Scraping", /scrap|peel|flak/],
+      ["Patching", /patch|fill|repair/],
+      ["Priming", /prim/],
+    ].filter(([, pattern]) => (pattern as RegExp).test(combined)).map(([name]) => name as string);
+    const suggestedPreparation = prepMatches.length > 1 ? "Multiple Steps" : (prepMatches[0] || null);
+    const categoryText = surfaceText.toLowerCase();
+    // A photo may contain several surfaces: leave the category unchanged unless exactly one is clear.
+    const matches = [
+      ["Siding", /\bsiding\b/], ["Wall", /\bwall\b/],
+      ["Ceiling", /\bceiling\b/], ["Trim", /\btrim\b|\bframe\b/],
+      ["Door", /\bdoor\b/], ["Deck", /\bdeck\b|\bsteps\b/],
+      ["Fence", /\bfence\b/],
+    ].filter(([, pattern]) => (pattern as RegExp).test(categoryText)).map(([name]) => name as string);
+    const uniqueCategories = [...new Set(matches)];
+    const newNotes = `AI photo observations (verify on site):\n${photoAnalysis.trim()}`;
+    setForm((current) => ({
+      ...current,
+      ...(suggestedCondition ? { condition: suggestedCondition } : {}),
+      ...(suggestedPreparation ? { preparation: suggestedPreparation } : {}),
+      ...(uniqueCategories.length === 1 ? { category: uniqueCategories[0] } : {}),
+      notes: current.notes.trim() ? `${current.notes.trim()}\n\n${newNotes}` : newNotes,
+    }));
+    setMessage("AI suggestions added to the form. Review category, condition, preparation and notes; enter measured dimensions before saving.");
+    document.getElementById("surface-name")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  async function handlePhoto(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file || !selectedProjectId || uploadingPhoto) return;
+    const projectId = selectedProjectId;
+    setPhotoAnalysis("");
+    setPhotoAnalysisError("");
+    setPhoto("");
+    setPhotoPath("");
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setMessage("Choose a JPEG, PNG, or WebP image.");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setMessage("Choose an image under 20 MB.");
+      return;
+    }
+    setUploadingPhoto(true);
+    setMessage("Preparing and saving photo to this project...");
+    try {
+      const image = new window.Image();
+      const objectUrl = URL.createObjectURL(file);
+      let result = "";
+      try {
+        await new Promise<void>((resolve, reject) => {
+          image.onload = () => resolve();
+          image.onerror = () => reject(new Error("Unable to read the selected photo."));
+          image.src = objectUrl;
+        });
+        const canvas = document.createElement("canvas");
+        const maxSide = 1600;
+        const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Your browser could not prepare this photo.");
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        let quality = 0.82;
+        result = canvas.toDataURL("image/jpeg", quality);
+        while (result.length * 0.75 > 1.5 * 1024 * 1024 && quality > 0.4) {
+          quality -= 0.1;
+          result = canvas.toDataURL("image/jpeg", quality);
+        }
+        if (result.length * 0.75 > 1.5 * 1024 * 1024) {
+          throw new Error("Photo is still too large after compression. Try a smaller photo.");
+        }
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+
+      // Upload the optimized image, not a large base64 string in walkthrough_data.
+      const blob = await (await fetch(result)).blob();
+      const path = `${projectId}/${crypto.randomUUID()}.jpg`;
+      const { error: uploadError } = await supabase.storage.from(PHOTO_BUCKET)
+        .upload(path, blob, { contentType: "image/jpeg", upsert: false });
+      if (uploadError) throw new Error(`Photo upload failed: ${uploadError.message}`);
+      if (selectedProjectId === projectId) {
+        setPhoto(result);
+        setPhotoPath(path);
+        setMessage("Photo saved to this project. You can analyze it now.");
+        try {
+          await refreshProjectPhotos(projectId);
+          setPhotoGalleryError("");
+        } catch (galleryError) {
+          setPhotoGalleryError(galleryError instanceof Error ? galleryError.message : "Unable to refresh photos.");
+        }
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save photo.");
+      event.target.value = "";
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }
+
+  const canCreateProject = role === "admin";
+  const visibleNavigation = navigation.filter((item) => item.href !== "/settings" || role === "admin");
 
   const inputStyle =
     "w-full rounded-xl border border-gray-200 bg-[#F7F8FA] px-4 py-3.5 text-[#252525] outline-none transition focus:border-[#ED1C24] focus:ring-2 focus:ring-red-100";
@@ -320,17 +621,17 @@ export default function WalkthroughPage() {
             </div>
           </Link>
           <nav className="hidden items-center gap-8 lg:flex">
-            {navigation.map((item) => (
+            {visibleNavigation.map((item) => (
               <Link key={item.href} href={item.href}
                 className="border-b-4 border-transparent py-2 text-sm font-bold text-gray-600 transition hover:text-[#ED1C24]">
                 {item.label}
               </Link>
             ))}
           </nav>
-          <Link href="/projects/new"
+          {canCreateProject && <Link href="/projects/new"
             className="hidden rounded-xl bg-[#ED1C24] px-6 py-4 text-sm font-black text-white shadow-lg transition hover:bg-red-700 sm:inline-flex">
             + New Project
-          </Link>
+          </Link>}
           {/* One desktop auth button, to the right of New Project */}
           {loggedIn !== null && (
             loggedIn ? (
@@ -354,9 +655,9 @@ export default function WalkthroughPage() {
         </div>
         {menuOpen && (
           <nav className="absolute left-0 right-0 top-full border-t border-gray-200 bg-white p-5 shadow-xl lg:hidden">
-            {[...navigation,
+            {[...visibleNavigation,
               { label: "AI Walkthrough", href: "/walkthrough" },
-              { label: "New Project", href: "/projects/new" },
+              ...(canCreateProject ? [{ label: "New Project", href: "/projects/new" }] : []),
             ].map((item) => (
               <Link key={item.href} href={item.href}
                 onClick={() => setMenuOpen(false)}
@@ -415,11 +716,11 @@ export default function WalkthroughPage() {
             <p className="text-gray-500">Loading projects...</p>
           ) : projects.length === 0 ? (
             <div className="rounded-xl bg-yellow-50 p-5">
-              <p className="font-bold">No projects have been created yet.</p>
-              <Link href="/projects/new"
+              <p className="font-bold">No projects available for walkthrough editing.</p>
+              {canCreateProject && <Link href="/projects/new"
                 className="mt-4 inline-flex rounded-xl bg-[#ED1C24] px-5 py-3 font-black text-white">
                 + Create First Project
-              </Link>
+              </Link>}
             </div>
           ) : (
             <>
@@ -436,7 +737,7 @@ export default function WalkthroughPage() {
                   </option>
                 ))}
               </select>
-              {selectedProject && (
+              {selectedProject && !loadingSurfaces && (
                 <p className="mt-4 text-sm text-gray-500">
                   📍 {selectedProject.address}
                 </p>
@@ -445,7 +746,7 @@ export default function WalkthroughPage() {
           )}
         </div>
 
-        {selectedProject && (
+        {selectedProject && !loadingSurfaces && (
           <>
             <div className="mt-8 grid gap-5 sm:grid-cols-3">
               {[
@@ -693,16 +994,42 @@ export default function WalkthroughPage() {
                     capture="environment" onChange={handlePhoto}
                     className={inputStyle} />
                   <p className="mt-2 text-xs text-gray-500">
-                    Take a photo or upload an image under 2 MB.
-                    Photos are stored in this browser, not uploaded to a server.
+                    Take a photo or upload an image up to 20 MB. It will be resized and compressed automatically.
+                    Photos are saved with the walkthrough in Supabase. Large images increase database usage.
                   </p>
                   {photo && (
                     <div className="mt-4">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={photo} alt="Surface preview"
                         className="max-h-72 w-full rounded-xl border border-gray-200 object-contain" />
-                      <button type="button" onClick={() => {
-                        setPhoto("");
+                       <button type="button" disabled={analyzingPhoto || saving || uploadingPhoto || !photoPath}
+                         onClick={analyzePhoto}
+                         className="mt-4 w-full rounded-xl bg-[#252525] px-5 py-4 font-black text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-50">
+                         {analyzingPhoto ? "ANALYZING PHOTO..." : "✦ ANALYZE PHOTO WITH AI"}
+                       </button>
+                       <p className="mt-2 text-xs text-gray-500">
+                         AI observations are suggestions, not verified measurements. Review them before recording work.
+                       </p>
+                       {photoAnalysisError && (
+                         <p role="alert" className="mt-3 rounded-xl bg-red-50 p-4 text-sm font-semibold text-red-800">
+                           {photoAnalysisError}
+                         </p>
+                       )}
+                       {photoAnalysis && (
+                         <div className="mt-4 rounded-xl border border-yellow-200 bg-yellow-50 p-5">
+                           <h3 className="font-black">AI Photo Review</h3>
+                           <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-gray-800">{photoAnalysis}</p>
+                           <p className="mt-3 text-xs text-gray-600">AI observations are unverified. A single photo may show several surfaces. Confirm the category, condition, preparation and notes for the surface you are recording. Dimensions and paint coats remain under your control.</p>
+                           <button type="button" onClick={applyAiSuggestions}
+                             className="mt-4 w-full rounded-xl bg-[#ED1C24] px-5 py-4 font-black text-white transition hover:bg-red-700">
+                             APPLY AI SUGGESTIONS TO FORM
+                           </button>
+                         </div>
+                       )}
+                       <button type="button" onClick={() => {
+                         setPhotoAnalysis("");
+                         setPhotoAnalysisError("");
+                         setPhoto("");
                         const input = document.getElementById("surface-photo") as HTMLInputElement | null;
                         if (input) input.value = "";
                       }} className="mt-3 text-sm font-bold text-[#ED1C24]">
@@ -717,15 +1044,43 @@ export default function WalkthroughPage() {
                     {message}
                   </p>
                 )}
-                <button type="submit"
+                <button type="submit" disabled={saving || loadingSurfaces}
                   className="w-full rounded-xl bg-[#ED1C24] px-6 py-5 text-lg font-black text-white shadow-lg transition hover:bg-red-700">
-                  + SAVE PAINTING SURFACE
+                  {saving ? "SAVING..." : "+ SAVE PAINTING SURFACE"}
                 </button>
               </div>
             </form>
 
-            <section className="mt-10">
-              <div className="mb-6 flex items-center gap-3">
+             <section className="mt-10 rounded-2xl border border-gray-100 bg-white p-6 shadow-md">
+               <div className="mb-4 flex items-center justify-between gap-3">
+                 <div>
+                   <h2 className="text-2xl font-black uppercase">Project Photos</h2>
+                   <p className="mt-1 text-sm text-gray-500">Saved with this project for future estimates and PDFs. Removing a surface does not delete its photos.</p>
+                 </div>
+                 <span className="rounded-full bg-yellow-100 px-3 py-1 text-sm font-bold">{projectPhotos.length} photos</span>
+               </div>
+               {loadingPhotos && <p className="text-sm text-gray-500">Loading project photos...</p>}
+               {photoGalleryError && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{photoGalleryError}</p>}
+               {!loadingPhotos && projectPhotos.length === 0 && !photoGalleryError && (
+                 <p className="rounded-xl bg-gray-50 p-5 text-sm text-gray-600">No saved project photos yet. Upload a photo above to add it here automatically.</p>
+               )}
+               <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
+                 {projectPhotos.map((item) => (
+                   <a key={item.path} href={item.url} target="_blank" rel="noopener noreferrer"
+                     className="block overflow-hidden rounded-xl border border-gray-200 hover:border-[#ED1C24]">
+                     {/* eslint-disable-next-line @next/next/no-img-element */}
+                     <img src={item.url} alt="Project photo" className="aspect-square w-full object-cover" />
+                     <div className="p-2 text-xs text-gray-600">
+                       {item.createdAt ? new Date(item.createdAt).toLocaleString() : "Saved photo"}
+                     </div>
+                   </a>
+                 ))}
+               </div>
+               <p className="mt-4 text-xs text-gray-500">Photo links are temporary and private. Refresh the page to renew them when needed.</p>
+             </section>
+
+             <section className="mt-10">
+               <div className="mb-6 flex items-center gap-3">
                 <span className="h-1.5 w-12 bg-[#ED1C24]" />
                 <h2 className="text-2xl font-black uppercase">Recorded Surfaces</h2>
               </div>
