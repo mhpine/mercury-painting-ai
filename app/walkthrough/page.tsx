@@ -41,7 +41,7 @@ type Surface = {
   photoPath?: string; // New permanent private Storage location.
 };
 
-type ProjectPhoto = { path: string; name: string; url: string; createdAt?: string };
+type ProjectPhoto = { path: string; name: string; url: string; createdAt?: string | null };
 const PHOTO_BUCKET = "mercury-project-photos";
 
 type EmployeeRole = "admin" | "employee";
