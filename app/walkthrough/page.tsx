@@ -47,6 +47,23 @@ const PHOTO_BUCKET = "mercury-project-photos";
 type EmployeeRole = "admin" | "employee";
 type WalkthroughData = { surfaces?: Surface[] };
 
+type AiFindings = {
+  name?: string;
+  category?: string;
+  condition?: string;
+  preparation?: string;
+  coats?: string;
+  notes?: string;
+};
+
+const allowedConditions = ["Good", "Fair", "Poor", "Damaged"];
+const allowedPreparations = ["None", "Cleaning", "Sanding", "Scraping", "Patching", "Priming", "Multiple Steps"];
+
+function allowedChoice(value: unknown, options: string[]): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return options.find((option) => option.toLowerCase() === value.trim().toLowerCase());
+}
+
 const navigation = [
   { label: "Dashboard", href: "/" },
   { label: "Projects", href: "/projects" },
@@ -130,6 +147,7 @@ export default function WalkthroughPage() {
   const [photoGalleryError, setPhotoGalleryError] = useState("");
   const [analyzingPhoto, setAnalyzingPhoto] = useState(false);
   const [photoAnalysis, setPhotoAnalysis] = useState("");
+  const [aiFindings, setAiFindings] = useState<AiFindings | null>(null);
   const [photoAnalysisError, setPhotoAnalysisError] = useState("");
 
   // Projects are loaded from Supabase and filtered by project ownership or an edit share.
@@ -238,6 +256,7 @@ export default function WalkthroughPage() {
     setPhoto("");
     setPhotoPath("");
     setPhotoAnalysis("");
+    setAiFindings(null);
     setPhotoAnalysisError("");
     setProjectPhotos([]);
     setPhotoGalleryError("");
@@ -426,6 +445,7 @@ export default function WalkthroughPage() {
       setPhoto("");
       setPhotoPath("");
       setPhotoAnalysis("");
+    setAiFindings(null);
       setPhotoAnalysisError("");
       const fileInput = document.getElementById("surface-photo") as HTMLInputElement | null;
       if (fileInput) fileInput.value = "";
@@ -442,6 +462,7 @@ export default function WalkthroughPage() {
     if (!photo || !selectedProjectId || analyzingPhoto || uploadingPhoto || !photoPath) return;
     setAnalyzingPhoto(true);
     setPhotoAnalysis("");
+    setAiFindings(null);
     setPhotoAnalysisError("");
     try {
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
@@ -455,10 +476,19 @@ export default function WalkthroughPage() {
         },
         body: JSON.stringify({ projectId: selectedProjectId, imageDataUrl: photo }),
       });
-      const result: { analysis?: string; error?: string } = await response.json();
-      if (!response.ok) throw new Error(result.error || `AI request failed (${response.status}).`);
-      if (!result.analysis?.trim()) throw new Error("The AI returned no analysis. Try another photo.");
-      setPhotoAnalysis(result.analysis);
+    const result: { analysis?: string; error?: string; findings?: AiFindings } = await response.json();
+    if (!response.ok) throw new Error(result.error || `AI request failed (${response.status}).`);
+    if (!result.analysis?.trim() && !result.findings) {
+      throw new Error("The AI returned no analysis. Try another photo.");
+    }
+    setPhotoAnalysis(result.analysis || result.findings?.notes || "AI findings ready for review.");
+    if (result.findings) {
+      setAiFindings(result.findings);
+      applyFindingsToForm(result.findings, result.analysis || "");
+      setMessage("AI findings added to the form. Review all suggestions and enter measured dimensions before saving.");
+    } else {
+      setMessage("AI analysis is available, but no structured form suggestions were returned.");
+    }
     } catch (error) {
       setPhotoAnalysisError(error instanceof Error ? error.message : "Unable to analyze photo.");
     } finally {
@@ -466,54 +496,35 @@ export default function WalkthroughPage() {
     }
   }
 
-  function applyAiSuggestions() {
-    if (!photoAnalysis.trim()) return;
-    // Read only the AI's existing narrative; do not invent measurements or change saved records.
-    const section = (heading: string) => {
-      const lines = photoAnalysis.split(/\r?\n/);
-      const start = lines.findIndex((line) => line.trim().toLowerCase().replace(/:$/, "") === heading.toLowerCase());
-      if (start < 0) return "";
-      const next = lines.slice(start + 1).findIndex((line) =>
-        /^(surfaces|visible condition|suggested preparation|need to verify):?$/i.test(line.trim()));
-      return lines.slice(start + 1, next < 0 ? undefined : start + 1 + next).join("\n").trim();
-    };
-    const surfaceText = section("Surfaces");
-    const conditionText = section("Visible condition");
-    const preparationText = section("Suggested preparation");
-    const combined = `${conditionText}\n${preparationText}`.toLowerCase();
-    const suggestedCondition = /rot|severe|extensive damage|large cracks|damaged wood/i.test(conditionText)
-      ? "Damaged"
-      : /peel|flak|crack|blister|chipp|heavy wear/i.test(conditionText)
-        ? "Poor"
-        : /minor|some wear|discolor|dirt|stain/i.test(conditionText)
-          ? "Fair"
-          : null;
-    const prepMatches = [
-      ["Cleaning", /clean|wash|dirt|debris|pressure wash/],
-      ["Sanding", /sand/],
-      ["Scraping", /scrap|peel|flak/],
-      ["Patching", /patch|fill|repair/],
-      ["Priming", /prim/],
-    ].filter(([, pattern]) => (pattern as RegExp).test(combined)).map(([name]) => name as string);
-    const suggestedPreparation = prepMatches.length > 1 ? "Multiple Steps" : (prepMatches[0] || null);
-    const categoryText = surfaceText.toLowerCase();
-    // A photo may contain several surfaces: leave the category unchanged unless exactly one is clear.
-    const matches = [
-      ["Siding", /\bsiding\b/], ["Wall", /\bwall\b/],
-      ["Ceiling", /\bceiling\b/], ["Trim", /\btrim\b|\bframe\b/],
-      ["Door", /\bdoor\b/], ["Deck", /\bdeck\b|\bsteps\b/],
-      ["Fence", /\bfence\b/],
-    ].filter(([, pattern]) => (pattern as RegExp).test(categoryText)).map(([name]) => name as string);
-    const uniqueCategories = [...new Set(matches)];
-    const newNotes = `AI photo observations (verify on site):\n${photoAnalysis.trim()}`;
+  function applyFindingsToForm(ai: AiFindings, analysisText: string) {
+    const category = allowedChoice(ai.category, categories);
+    const condition = allowedChoice(ai.condition, allowedConditions);
+    const preparation = allowedChoice(ai.preparation, allowedPreparations);
+    const coats = typeof ai.coats === "string" && /^[1-4]$/.test(ai.coats.trim())
+      ? ai.coats.trim() : undefined;
+    const observation = [ai.notes?.trim(), analysisText.trim()]
+      .filter((part, index, items): part is string => Boolean(part) && items.indexOf(part) === index)
+      .join("\n\n");
+    const noteBlock = observation ? `AI photo observations (verify on site):\n${observation}` : "";
+
     setForm((current) => ({
       ...current,
-      ...(suggestedCondition ? { condition: suggestedCondition } : {}),
-      ...(suggestedPreparation ? { preparation: suggestedPreparation } : {}),
-      ...(uniqueCategories.length === 1 ? { category: uniqueCategories[0] } : {}),
-      notes: current.notes.trim() ? `${current.notes.trim()}\n\n${newNotes}` : newNotes,
+      name: ai.name?.trim() || current.name,
+      ...(category ? { category } : {}),
+      ...(condition ? { condition } : {}),
+      ...(preparation ? { preparation } : {}),
+      ...(coats ? { coats } : {}),
+      notes: noteBlock && !current.notes.includes(noteBlock)
+        ? (current.notes.trim() ? `${current.notes.trim()}\n\n${noteBlock}` : noteBlock)
+        : current.notes,
+      // Never infer or overwrite measured length/height or opening deductions.
     }));
-    setMessage("AI suggestions added to the form. Review category, condition, preparation and notes; enter measured dimensions before saving.");
+  }
+
+  function applyAiSuggestions() {
+    if (!aiFindings) return;
+    applyFindingsToForm(aiFindings, photoAnalysis);
+    setMessage("AI suggestions applied. Verify each field and enter measured dimensions before saving.");
     document.getElementById("surface-name")?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
@@ -522,6 +533,7 @@ export default function WalkthroughPage() {
     if (!file || !selectedProjectId || uploadingPhoto) return;
     const projectId = selectedProjectId;
     setPhotoAnalysis("");
+    setAiFindings(null);
     setPhotoAnalysisError("");
     setPhoto("");
     setPhotoPath("");
@@ -1019,15 +1031,16 @@ export default function WalkthroughPage() {
                          <div className="mt-4 rounded-xl border border-yellow-200 bg-yellow-50 p-5">
                            <h3 className="font-black">AI Photo Review</h3>
                            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-gray-800">{photoAnalysis}</p>
-                           <p className="mt-3 text-xs text-gray-600">AI observations are unverified. A single photo may show several surfaces. Confirm the category, condition, preparation and notes for the surface you are recording. Dimensions and paint coats remain under your control.</p>
-                           <button type="button" onClick={applyAiSuggestions}
+                           <p className="mt-3 text-xs text-gray-600">AI suggestions have been added to the form when available. Review the surface category, condition, preparation, coats, and notes. Enter measured dimensions yourself.</p>
+                           <button type="button" onClick={applyAiSuggestions} disabled={!aiFindings}
                              className="mt-4 w-full rounded-xl bg-[#ED1C24] px-5 py-4 font-black text-white transition hover:bg-red-700">
-                             APPLY AI SUGGESTIONS TO FORM
+                             REAPPLY AI SUGGESTIONS TO FORM
                            </button>
                          </div>
                        )}
                        <button type="button" onClick={() => {
                          setPhotoAnalysis("");
+    setAiFindings(null);
                          setPhotoAnalysisError("");
                          setPhoto("");
                         const input = document.getElementById("surface-photo") as HTMLInputElement | null;

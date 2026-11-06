@@ -79,12 +79,64 @@ export async function POST(request: NextRequest) {
       input: [{
         role: "user",
         content: [
-          { type: "input_text", text: "You are assisting a professional painting estimator. Inspect this photo and describe only visible evidence. Identify likely paintable surfaces, visible condition/problems, recommended preparation, and uncertainties. Never invent dimensions, square footage, paint quantity, hidden damage, or material types that cannot be confirmed. Reply in concise plain English with headings: Surfaces, Visible condition, Suggested preparation, Need to verify. Do not include prices." },
+          {
+  type: "input_text",
+  text: `You are Mercury Painting's professional AI estimator.
+
+Analyze the photograph and return ONLY a valid JSON object
+with exactly these fields:
+
+{
+  "name": "",
+  "category": "Wall",
+  "condition": "Good",
+  "preparation": "None",
+  "coats": "2",
+  "notes": "",
+  "analysis": ""
+}
+
+Rules:
+- Name: Suggest a descriptive name for the visible surface.
+- Category: Identify the likely paintable surface.
+- Condition: Describe the visible condition.
+- Preparation: Recommend necessary preparation.
+- Coats: Suggest a reasonable number of coats, but do not claim certainty.
+- Notes: Include useful observations and uncertainties.
+- Analysis: Provide a concise explanation of the findings.
+- Never invent measurements, square footage, hidden damage, or prices.
+- Do not include length or height.
+- Do not include markdown formatting or code fences.
+- Return valid JSON only.`
+},
           { type: "input_image", image_url: imageDataUrl, detail: "low" },
         ],
       }],
     });
-    return NextResponse.json({ analysis: response.output_text });
+  const raw = response.output_text.trim();
+
+let findings;
+
+try {
+  findings = JSON.parse(raw);
+} catch {
+  return NextResponse.json(
+    { error: "AI returned an invalid response. Please try again." },
+    { status: 502 }
+  );
+}
+
+return NextResponse.json({
+  analysis: findings.analysis || findings.notes || "",
+  findings: {
+    name: findings.name || "",
+    category: findings.category || "Wall",
+    condition: findings.condition || "Good",
+    preparation: findings.preparation || "None",
+    coats: findings.coats || "2",
+    notes: findings.notes || "",
+  },
+});
   } catch (error) {
     console.error("Mercury AI analysis failed:", error);
     return NextResponse.json({ error: "Photo analysis failed. Please try again." }, { status: 500 });
