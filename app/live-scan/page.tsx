@@ -45,6 +45,53 @@ const [inspection, setInspection] = useState<{
 
 const [editingInspection, setEditingInspection] = useState(false);
 const [approvedInspection, setApprovedInspection] = useState(false);
+const [inspectionId, setInspectionId] = useState<string | null>(null);
+// Recover the latest saved inspection for the selected project.
+useEffect(() => {
+  // Clear the previous project's report before loading another.
+  setInspection(null);
+  setInspectionId(null);
+  setApprovedInspection(false);
+  setEditingInspection(false);
+
+  if (!projectId) return;
+
+  let active = true;
+
+  async function restoreInspection() {
+    const { data, error } = await supabase
+      .from("mercury_inspections")
+      .select("id, analysis, findings, status")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!active) return;
+
+    if (error) {
+      setError(`Unable to restore inspection: ${error.message}`);
+      return;
+    }
+
+    if (data) {
+      setInspectionId(data.id);
+      setInspection({
+        analysis: data.analysis,
+        findings: data.findings as InspectionFindings,
+      });
+      setApprovedInspection(data.status === "approved");
+      setEditingInspection(false);
+    }
+  }
+
+  void restoreInspection();
+
+  return () => {
+    active = false;
+  };
+}, [projectId]);
+
 
   useEffect(() => {
     let active = true;
@@ -178,7 +225,12 @@ async function analyzeLiveScanPhoto(
 
   async function markPhoto() {
     if (savingRef.current) return;
-
+    if (inspection && !approvedInspection) {
+      setError(
+        "You have an unfinished AI inspection. Review and approve it before taking another photo."
+      );
+      return;
+    }
     setError("");
     setMessage("");
 
@@ -298,12 +350,35 @@ const result = await analyzeLiveScanPhoto(
   projectId
 );
 
-// Store the AI findings for the inspection panel.
+// Save the AI inspection permanently to Supabase.
+const inspectionData = {
+  project_id: projectId,
+  analysis: result.analysis,
+  findings: { ...result.findings },
+  status: "draft",
+};
+
+const { data: savedInspection, error: inspectionSaveError } =
+  await supabase
+    .from("mercury_inspections")
+    .insert(inspectionData)
+    .select("id")
+    .single();
+
+if (inspectionSaveError) {
+  throw new Error(
+    `Unable to save AI inspection: ${inspectionSaveError.message}`
+  );
+}
+
+// Display the saved inspection.
 setInspection({
   analysis: result.analysis,
   findings: { ...result.findings },
 });
 
+console.log("Mercury inspection saved:", savedInspection.id);
+setInspectionId(savedInspection.id);
 // Every new inspection requires painter review.
 setEditingInspection(false);
 setApprovedInspection(false);
@@ -381,10 +456,22 @@ setMessage(
             id="project-select"
             value={projectId}
             onChange={(event) => {
-              setProjectId(event.target.value);
-              setError("");
-              setMessage("");
-            }}
+  const nextProjectId = event.target.value;
+
+  if (nextProjectId !== projectId) {
+    setInspection(null);
+    setEditingInspection(false);
+    setApprovedInspection(false);
+
+    // Remove the previous project's temporary report
+    // from this browser before switching projects.
+   
+  }
+
+  setProjectId(nextProjectId);
+  setError("");
+  setMessage("");
+}}
             disabled={loadingProjects || savingPhoto}
             className="mt-2 w-full rounded-lg border border-slate-600 bg-slate-800 p-3 text-white"
           >
@@ -545,7 +632,39 @@ setMessage(
       <button
         type="button"
         disabled={editingInspection || approvedInspection}
-        onClick={() => setApprovedInspection(true)}
+        onClick={async () => {
+  if (!inspectionId || !inspection || !projectId) {
+    setError("No saved inspection is available to approve.");
+    return;
+  }
+
+  setError("");
+
+  const { data, error } = await supabase
+  
+    .from("mercury_inspections")
+    .update({
+      findings: inspection.findings,
+      analysis: inspection.analysis,
+      status: "approved",
+      approved_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", inspectionId)
+.eq("project_id", projectId)
+.select("id");
+
+  if (error) {
+    setError(`Unable to approve inspection: ${error.message}`);
+    return;
+  }
+if (!data || data.length === 0) {
+  setError("Inspection approval was not saved. Please try again.");
+  return;
+}
+  setApprovedInspection(true);
+  setMessage("Inspection approved and saved to Mercury.");
+}}
         className="rounded-lg bg-emerald-600 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
       >
         {approvedInspection ? "✓ APPROVED" : "✓ APPROVE FINDINGS"}
