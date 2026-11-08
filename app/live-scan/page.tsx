@@ -323,9 +323,7 @@ setMessage(
       : "AI analysis failed."
   );
 }
-setInspection(null);
-setEditingInspection(false);
-setApprovedInspection(false);
+
     } catch (err) {
       setError(
         err instanceof Error
