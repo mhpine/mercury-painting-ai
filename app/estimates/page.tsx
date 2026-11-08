@@ -1,7 +1,5 @@
 "use client";
 
-
-
 import { useEffect, useState } from "react";
 
 import Image from "next/image";
@@ -11,8 +9,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { supabase } from "../lib/supabase";
-
-
 
 type Project = {
 
@@ -34,8 +30,6 @@ type Project = {
 
 };
 
-
-
 type Surface = {
 
   id: string;
@@ -56,11 +50,7 @@ type Surface = {
 
 };
 
-
-
 type ProjectPhoto = { path: string; url: string };
-
-
 
 type Walkthrough = {
 
@@ -69,8 +59,6 @@ type Walkthrough = {
   surfaces: Surface[];
 
 };
-
-
 
 type Rates = {
 
@@ -88,8 +76,6 @@ type Rates = {
 
 };
 
-
-
 const DEFAULT_RATES: Rates = {
 
   coverage: 350,
@@ -106,8 +92,6 @@ const DEFAULT_RATES: Rates = {
 
 };
 
-
-
 const navigation = [
 
   { label: "Dashboard", href: "/" },
@@ -119,8 +103,6 @@ const navigation = [
   { label: "Settings", href: "/settings" },
 
 ];
-
-
 
 function money(value: number) {
 
@@ -134,8 +116,6 @@ function money(value: number) {
 
 }
 
-
-
 export default function EstimatesPage() {
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -145,8 +125,6 @@ export default function EstimatesPage() {
   const [signingOut, setSigningOut] = useState(false);
 
   const router = useRouter();
-
-
 
   useEffect(() => {
 
@@ -175,8 +153,6 @@ export default function EstimatesPage() {
     };
 
   }, []);
-
-
 
   async function handleLogout() {
 
@@ -237,42 +213,65 @@ export default function EstimatesPage() {
   const [preparingPrint, setPreparingPrint] = useState(false);
 
 const [savedEstimates, setSavedEstimates] = useState<
+
   {
+
     name: string;
+
     path: string;
+
     createdAt: string;
+
   }[]
+
 >([]);
 
 const [savedEstimatesLoading, setSavedEstimatesLoading] =
+
   useState(false);
 
 const [savedEstimatesError, setSavedEstimatesError] =
+
   useState("");
 
 useEffect(() => {
+
   let active = true;
 
   async function loadSavedEstimates() {
+
     setSavedEstimates([]);
+
     setSavedEstimatesError("");
 
     if (!selectedId) {
+
       setSavedEstimatesLoading(false);
+
       return;
+
     }
 
     setSavedEstimatesLoading(true);
 
     try {
+
       const { data, error } = await supabase.storage
+
         .from("mercury-project-estimates")
+
         .list(selectedId, {
+
           limit: 100,
+
           sortBy: {
+
             column: "created_at",
+
             order: "desc",
+
           },
+
         });
 
       if (error) throw error;
@@ -280,41 +279,68 @@ useEffect(() => {
       console.log("MERCURY SAVED ESTIMATES:", data);
 
       if (active) {
+
         setSavedEstimates(
+
           (data ?? [])
+
             .filter((file) =>
+
               file.name.toLowerCase().endsWith(".pdf")
+
             )
+
             .map((file) => ({
+
               name: file.name,
+
               path: `${selectedId}/${file.name}`,
+
               createdAt: file.created_at ?? "",
+
             }))
+
         );
+
       }
+
     } catch (error) {
+
       if (active) {
+
         setSavedEstimatesError(
+
           error instanceof Error
+
             ? error.message
+
             : "Unable to load saved estimates."
+
         );
+
       }
+
     } finally {
+
       if (active) {
+
         setSavedEstimatesLoading(false);
+
       }
+
     }
+
   }
 
   void loadSavedEstimates();
 
   return () => {
+
     active = false;
+
   };
+
 }, [selectedId]);
-
-
 
   useEffect(() => {
 
@@ -464,8 +490,6 @@ useEffect(() => {
 
   }, []);
 
-
-
   // List photos from the private bucket for the selected project only.
 
   // Signed URLs are short-lived and must never be stored in the database.
@@ -526,14 +550,11 @@ useEffect(() => {
 
   }, [selectedId]);
 
-
-
   const project = projects.find((item) => item.id === selectedId);
 
   const canEdit = editableIds.includes(selectedId);
+
   const usingDefaultRates = !Object.prototype.hasOwnProperty.call(ratesByProject, selectedId);
-
-
 
   const walkthrough = walkthroughs.find(
 
@@ -541,11 +562,21 @@ useEffect(() => {
 
   );
 
-
-
   const surfaces = walkthrough?.surfaces || [];
 
+// Identify surfaces that still require field measurements.
 
+const unmeasuredSurfaces = surfaces.filter(
+
+  (surface) =>
+
+    !Number.isFinite(Number(surface.squareFeet)) ||
+
+    Number(surface.squareFeet) <= 0
+
+);
+
+const hasUnmeasuredSurfaces = unmeasuredSurfaces.length > 0;
 
   const totalArea = surfaces.reduce(
 
@@ -554,8 +585,6 @@ useEffect(() => {
     0
 
   );
-
-
 
   const coatedArea = surfaces.reduce(
 
@@ -570,8 +599,6 @@ useEffect(() => {
     0
 
   );
-
-
 
   const preparationArea = surfaces.reduce(
 
@@ -589,11 +616,7 @@ useEffect(() => {
 
   );
 
-
-
   const safeCoverage = Math.max(1, Number(rates.coverage) || 1);
-
-
 
   const gallons = Math.ceil(
 
@@ -603,43 +626,27 @@ useEffect(() => {
 
   );
 
-
-
   const paintCost = gallons * (Number(rates.paintPrice) || 0);
-
-
 
   // Labor rate is charged per square foot of surface area.
 
   const laborCost = totalArea * (Number(rates.laborRate) || 0);
 
-
-
   const preparationCost =
 
     preparationArea * (Number(rates.prepRate) || 0);
 
-
-
   const subtotal = paintCost + laborCost + preparationCost;
-
-
 
   const markup =
 
     subtotal * ((Number(rates.markupPercent) || 0) / 100);
 
-
-
   const total = subtotal + markup;
-
-
 
   function updateRate(name: keyof Rates, value: string) {
 
     const parsed = Number(value);
-
-
 
     setRates((previous) => ({
 
@@ -649,13 +656,9 @@ useEffect(() => {
 
     }));
 
-
-
     setMessage("");
 
   }
-
-
 
   async function saveRates() {
 
@@ -708,123 +711,206 @@ useEffect(() => {
   }
 
 async function generateEstimatePdf(): Promise<Blob> {
+  if (!requireCompleteMeasurements()) {
+    throw new Error("Enter measurements for all surfaces before generating the PDF.");
+  }
+
   const element = document.getElementById("printable-estimate");
 
   if (!element) {
+
     throw new Error("Customer estimate layout was not found.");
+
   }
 
   // Load the PDF libraries only when needed.
+
   const [{ default: html2canvas }, { jsPDF }] =
+
     await Promise.all([
+
       import("html2canvas-pro"),
+
       import("jspdf"),
+
     ]);
 
   // Wait for estimate photographs and logo to load.
+
   const images = Array.from(element.querySelectorAll("img"));
 
   await Promise.all(
+
     images.map((img) => {
+
       if (img.complete) return Promise.resolve();
 
       return new Promise<void>((resolve) => {
+
         img.addEventListener("load", () => resolve(), {
+
           once: true,
+
         });
+
         img.addEventListener("error", () => resolve(), {
+
           once: true,
+
         });
+
       });
+
     })
+
   );
 
-  
 const canvas = await html2canvas(element, {
+
   scale: 1.5,
+
   useCORS: true,
+
   backgroundColor: "#ffffff",
+
   logging: false,
+
   windowWidth: Math.max(
+
     document.documentElement.clientWidth,
+
     element.scrollWidth
+
   ),
+
   onclone: (clonedDocument) => {
+
     const style = clonedDocument.createElement("style");
 
     style.textContent = `
+
       #printable-estimate,
+
       #printable-estimate * {
+
         border-color: #e5e7eb;
+
         outline-color: #e5e7eb;
+
         text-decoration-color: currentColor;
+
       }
+
     `;
 
     clonedDocument.head.appendChild(style);
+
   },
+
 });
 
-
   const pdf = new jsPDF({
+
     orientation: "portrait",
+
     unit: "mm",
+
     format: "a4",
+
     compress: true,
+
   });
 
   const pageWidth = pdf.internal.pageSize.getWidth();
+
   const pageHeight = pdf.internal.pageSize.getHeight();
 
   const margin = 10;
+
   const usableWidth = pageWidth - margin * 2;
+
   const usableHeight = pageHeight - margin * 2;
 
   const imageWidth = usableWidth;
+
   const imageHeight =
+
     (canvas.height * imageWidth) / canvas.width;
 
   const imageData = canvas.toDataURL("image/jpeg", 0.85);
 
   let remainingHeight = imageHeight;
+
   let position = margin;
 
   pdf.addImage(
+
     imageData,
+
     "JPEG",
+
     margin,
+
     position,
+
     imageWidth,
+
     imageHeight
+
   );
 
   remainingHeight -= usableHeight;
 
   while (remainingHeight > 0) {
+
     position -= usableHeight;
 
     pdf.addPage();
 
     pdf.addImage(
+
       imageData,
+
       "JPEG",
+
       margin,
+
       position,
+
       imageWidth,
+
       imageHeight
+
     );
 
     remainingHeight -= usableHeight;
+
   }
 
   return pdf.output("blob");
+
 }
 
+  function requireCompleteMeasurements(): boolean {
+    if (!hasUnmeasuredSurfaces) return true;
 
+    const names = unmeasuredSurfaces
+      .map((surface) => surface.name || "Unnamed surface")
+      .join(", ");
+
+    alert(
+      `ESTIMATE NOT READY\n\n` +
+      `${unmeasuredSurfaces.length} surface(s) require measurements:\n\n` +
+      `${names}\n\n` +
+      `Open the project walkthrough and enter actual square footage before printing or saving a customer estimate.`
+    );
+    return false;
+  }
 
   async function printEstimate() {
 
     if (!project || surfaces.length === 0 || preparingPrint) return;
+    if (!requireCompleteMeasurements()) return;
 
     setPreparingPrint(true);
 
@@ -852,27 +938,19 @@ const canvas = await html2canvas(element, {
 
   }
 
-
-
   const inputStyle =
 
     "w-full rounded-xl border border-gray-200 bg-[#F7F8FA] px-4 py-3 text-[#252525] outline-none focus:border-[#ED1C24]";
 
-
-
   return (
 
     <main className="min-h-screen bg-[#F5F5F5] text-[#252525]">
-
-
 
       {/* HEADER */}
 
       <header className="no-print relative z-30 border-b border-gray-200 bg-white">
 
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-3">
-
-
 
           <Link
 
@@ -902,8 +980,6 @@ const canvas = await html2canvas(element, {
 
             </div>
 
-
-
             <div className="border-l-4 border-[#FFD400] pl-3 sm:pl-5">
 
               <span className="text-base font-black uppercase tracking-wide text-[#ED1C24] sm:text-2xl">
@@ -915,8 +991,6 @@ const canvas = await html2canvas(element, {
             </div>
 
           </Link>
-
-
 
           <nav className="hidden items-center gap-8 lg:flex">
 
@@ -948,8 +1022,6 @@ const canvas = await html2canvas(element, {
 
           </nav>
 
-
-
           {isAdmin && <Link
 
             href="/projects/new"
@@ -961,8 +1033,6 @@ const canvas = await html2canvas(element, {
             + New Project
 
           </Link>}
-
-
 
           <div className="hidden lg:flex">
 
@@ -988,8 +1058,6 @@ const canvas = await html2canvas(element, {
 
           </div>
 
-
-
           <button
 
             type="button"
@@ -1009,8 +1077,6 @@ const canvas = await html2canvas(element, {
           </button>
 
         </div>
-
-
 
         {menuOpen && (
 
@@ -1072,21 +1138,15 @@ const canvas = await html2canvas(element, {
 
       </header>
 
-
-
       {/* MAIN CONTENT */}
 
       <section className="mx-auto max-w-7xl px-5 py-12">
-
-
 
         <div className="no-print mb-10">
 
           <div className="mb-4 flex items-center gap-3">
 
             <span className="h-1.5 w-12 bg-[#ED1C24]" />
-
-
 
             <p className="text-sm font-black uppercase tracking-widest text-[#ED1C24]">
 
@@ -1096,15 +1156,11 @@ const canvas = await html2canvas(element, {
 
           </div>
 
-
-
           <h1 className="text-3xl font-black uppercase tracking-tight sm:text-5xl">
 
             Painting Estimates
 
           </h1>
-
-
 
           <p className="mt-4 max-w-2xl leading-7 text-gray-600">
 
@@ -1114,19 +1170,13 @@ const canvas = await html2canvas(element, {
 
           </p>
 
-
-
           <div className="mt-6 h-2 w-28 bg-[#FFD400]" />
 
         </div>
 
-
-
         {/* PROJECT SELECTION */}
 
         <div className="no-print rounded-2xl border border-gray-100 bg-white p-6 shadow-md">
-
-
 
           <h2 className="text-xl font-black">
 
@@ -1134,15 +1184,11 @@ const canvas = await html2canvas(element, {
 
           </h2>
 
-
-
           <p className="mt-2 text-sm text-gray-500">
 
             Choose a project with recorded walkthrough measurements.
 
           </p>
-
-
 
           {loadError && <p role="alert" className="mt-4 text-red-700">{loadError}</p>}
 
@@ -1159,8 +1205,6 @@ const canvas = await html2canvas(element, {
                 No projects have been created yet.
 
               </p>
-
-
 
               {isAdmin && <Link
 
@@ -1216,8 +1260,6 @@ const canvas = await html2canvas(element, {
 
         </div>
 
-
-
         {project && (
 
           <>
@@ -1225,8 +1267,6 @@ const canvas = await html2canvas(element, {
             {/* ESTIMATE SUMMARY */}
 
             <div className="no-print mt-8 grid gap-5 sm:grid-cols-3">
-
-
 
               <div className="rounded-2xl bg-white p-6 shadow-md">
 
@@ -1248,8 +1288,6 @@ const canvas = await html2canvas(element, {
 
               </div>
 
-
-
               <div className="rounded-2xl bg-white p-6 shadow-md">
 
                 <p className="text-sm font-bold text-gray-500">
@@ -1269,8 +1307,6 @@ const canvas = await html2canvas(element, {
                 <div className="mt-4 h-1.5 w-20 bg-[#FFD400]" />
 
               </div>
-
-
 
               <div className="rounded-2xl bg-[#252525] p-6 text-white shadow-md">
 
@@ -1292,24 +1328,49 @@ const canvas = await html2canvas(element, {
 
             </div>
 
-
+              {hasUnmeasuredSurfaces && (
+                <div className="no-print mt-8 rounded-2xl border-2 border-red-300 bg-red-50 p-6 text-red-900" role="alert">
+                  <p className="font-black">ESTIMATE NOT READY — MEASUREMENTS REQUIRED</p>
+                  <p className="mt-2 text-sm">
+                    {unmeasuredSurfaces.length} surface(s) still need actual square footage.
+                    Printing and saving a customer PDF are blocked until these are measured.
+                  </p>
+                  <ul className="mt-3 list-disc pl-5 text-sm">
+                    {unmeasuredSurfaces.map((surface) => (
+                      <li key={surface.id}>{surface.name || "Unnamed surface"}</li>
+                    ))}
+                  </ul>
+                  {canEdit && (
+                    <Link href={`/walkthrough?projectId=${selectedId}`} className="mt-4 inline-flex rounded-xl bg-[#ED1C24] px-5 py-3 font-bold text-white">
+                      ENTER MEASUREMENTS
+                    </Link>
+                  )}
+                </div>
+              )}
 
             {/* Preliminary pricing warning — Washington benchmark defaults are estimates, not approved prices. */}
+
               <div className="no-print mt-8 rounded-2xl border-2 border-amber-300 bg-amber-50 p-6 text-amber-950" role="status">
+
                 <p className="font-black">WASHINGTON BASELINE — PRICING REVIEW REQUIRED</p>
+
                 <p className="mt-2 text-sm leading-6">
+
                   {usingDefaultRates
+
                     ? "This project is using provisional Washington State residential painting benchmarks, not confirmed Mercury Painting rates. Review before quoting a customer."
+
                     : "This project has saved pricing rates. Confirm that they are accurate and approved before giving the estimate to a customer."}
+
                   {" "}AI photo observations and preparation recommendations must also be verified on site.
+
                 </p>
+
               </div>
 
               {/* ESTIMATING RATES */}
 
             <section className="no-print mt-8 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-md">
-
-
 
               <div className="border-b border-gray-100 px-6 py-6">
 
@@ -1331,11 +1392,7 @@ const canvas = await html2canvas(element, {
 
               </div>
 
-
-
               <div className="grid gap-5 p-6 sm:grid-cols-2 lg:grid-cols-3">
-
-
 
                 {[
 
@@ -1403,8 +1460,6 @@ const canvas = await html2canvas(element, {
 
                     </label>
 
-
-
                     <input
 
                       id={field.name}
@@ -1441,8 +1496,6 @@ const canvas = await html2canvas(element, {
 
               </div>
 
-
-
               <div className="border-t border-gray-100 px-6 py-5">
 
                 {isAdmin && <button
@@ -1461,8 +1514,6 @@ const canvas = await html2canvas(element, {
 
                 </button>}
 
-
-
                 {message && (
 
                   <p role="status" className="mt-3 text-sm font-bold">
@@ -1478,73 +1529,128 @@ const canvas = await html2canvas(element, {
             </section>
 
 {/* SAVED ESTIMATES */}
+
 <section className="mt-8 rounded-2xl border border-gray-200 bg-white p-6 shadow-md">
+
   <div className="mb-5">
+
     <h2 className="text-2xl font-black text-gray-900">
+
       📁 Saved Estimates
+
     </h2>
+
     <p className="mt-1 text-sm text-gray-600">
+
       Previously saved PDF estimates for this project.
+
     </p>
+
   </div>
 
   {savedEstimatesLoading ? (
+
     <p className="text-gray-500">Loading saved estimates...</p>
+
   ) : savedEstimatesError ? (
+
     <p className="text-red-600">{savedEstimatesError}</p>
+
   ) : savedEstimates.length === 0 ? (
+
     <p className="text-gray-500">
+
       No saved estimates yet. Use SAVE TO MERCURY to save one.
+
     </p>
+
   ) : (
+
     <div className="space-y-3">
+
       {savedEstimates.map((estimate) => (
+
         <div
+
           key={estimate.path}
+
           className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-gray-200 p-4"
+
         >
+
           <div>
+
             <p className="font-bold text-gray-900">
+
               📄 {estimate.name}
+
             </p>
+
             <p className="mt-1 text-sm text-gray-500">
+
               {estimate.createdAt
+
                 ? new Date(estimate.createdAt).toLocaleString()
+
                 : "Saved estimate"}
+
             </p>
+
           </div>
 
           <button
+
             type="button"
+
             onClick={async () => {
+
               const { data, error } = await supabase.storage
+
                 .from("mercury-project-estimates")
+
                 .createSignedUrl(estimate.path, 60);
 
               if (error || !data?.signedUrl) {
+
                 alert(
+
                   error?.message ?? "Unable to open saved estimate."
+
                 );
+
                 return;
+
               }
 
               window.open(
+
                 data.signedUrl,
+
                 "_blank",
+
                 "noopener,noreferrer"
+
               );
+
             }}
+
             className="rounded-xl bg-gray-900 px-5 py-3 font-bold text-white hover:bg-gray-700"
+
           >
+
             OPEN PDF
+
           </button>
+
         </div>
+
       ))}
+
     </div>
+
   )}
+
 </section>
-
-
 
             {/* CUSTOMER ESTIMATE */}
 
@@ -1556,13 +1662,9 @@ const canvas = await html2canvas(element, {
 
             >
 
-
-
               <div className="border-b-4 border-[#FFD400] p-6 sm:p-8">
 
                 <div className="flex flex-wrap items-center justify-between gap-5">
-
-
 
                   <div className="flex items-center gap-4">
 
@@ -1584,8 +1686,6 @@ const canvas = await html2canvas(element, {
 
                     </div>
 
-
-
                     <div className="border-l-4 border-[#FFD400] pl-4">
 
                       <p className="text-lg font-black text-[#ED1C24]">
@@ -1597,8 +1697,6 @@ const canvas = await html2canvas(element, {
                     </div>
 
                   </div>
-
-
 
                   <div className="text-sm text-gray-500">
 
@@ -1616,15 +1714,9 @@ const canvas = await html2canvas(element, {
 
               </div>
 
-
-
               <div className="p-6 sm:p-8">
 
-
-
                 <div className="grid gap-6 sm:grid-cols-2">
-
-
 
                   <div>
 
@@ -1634,15 +1726,11 @@ const canvas = await html2canvas(element, {
 
                     </p>
 
-
-
                     <h3 className="mt-3 text-xl font-black">
 
                       {project.customerName}
 
                     </h3>
-
-
 
                     {project.companyName && (
 
@@ -1654,8 +1742,6 @@ const canvas = await html2canvas(element, {
 
                     )}
 
-
-
                     {project.phone && (
 
                       <p className="mt-1 text-sm text-gray-600">
@@ -1665,8 +1751,6 @@ const canvas = await html2canvas(element, {
                       </p>
 
                     )}
-
-
 
                     {project.email && (
 
@@ -1680,8 +1764,6 @@ const canvas = await html2canvas(element, {
 
                   </div>
 
-
-
                   <div>
 
                     <p className="text-xs font-black uppercase tracking-widest text-[#ED1C24]">
@@ -1690,15 +1772,11 @@ const canvas = await html2canvas(element, {
 
                     </p>
 
-
-
                     <p className="mt-3 font-bold">
 
                       {project.address}
 
                     </p>
-
-
 
                     <p className="mt-2 text-sm text-gray-500">
 
@@ -1710,8 +1788,6 @@ const canvas = await html2canvas(element, {
 
                 </div>
 
-
-
                 <div className="mt-10">
 
                   <h3 className="text-xl font-black uppercase">
@@ -1720,13 +1796,9 @@ const canvas = await html2canvas(element, {
 
                   </h3>
 
-
-
                   <div className="mt-5 overflow-x-auto">
 
                     <table className="w-full min-w-[500px] text-left text-sm">
-
-
 
                       <thead className="bg-[#252525] text-white">
 
@@ -1743,8 +1815,6 @@ const canvas = await html2canvas(element, {
                         </tr>
 
                       </thead>
-
-
 
                       <tbody>
 
@@ -1764,23 +1834,17 @@ const canvas = await html2canvas(element, {
 
                             </td>
 
-
-
                             <td className="p-4">
 
                               {surface.squareFeet.toLocaleString()} sq ft
 
                             </td>
 
-
-
                             <td className="p-4">
 
                               {surface.coats}
 
                             </td>
-
-
 
                             <td className="p-4">
 
@@ -1798,8 +1862,6 @@ const canvas = await html2canvas(element, {
 
                   </div>
 
-
-
                   {surfaces.length === 0 && (
 
                     <div className="no-print mt-5 rounded-xl bg-yellow-50 p-5">
@@ -1810,8 +1872,6 @@ const canvas = await html2canvas(element, {
 
                       </p>
 
-
-
                       <p className="mt-2 text-sm text-gray-600">
 
                         Record painting surfaces before generating
@@ -1819,8 +1879,6 @@ const canvas = await html2canvas(element, {
                         an estimate.
 
                       </p>
-
-
 
                       {canEdit && <Link
 
@@ -1839,8 +1897,6 @@ const canvas = await html2canvas(element, {
                   )}
 
                 </div>
-
-
 
                                  {/* CUSTOMER PRICE: no internal rates, costs, or markup in print */}
 
@@ -1869,8 +1925,6 @@ const canvas = await html2canvas(element, {
                    </div>
 
                  )}
-
-
 
                  {/* Customer-facing project documentation from private Storage */}
 
@@ -1912,8 +1966,6 @@ const canvas = await html2canvas(element, {
 
                  </div>
 
-
-
                  {surfaces.some((surface) => /AI photo observations/i.test(surface.notes ?? "")) && (
 
                    <div className="mt-10">
@@ -1941,8 +1993,6 @@ const canvas = await html2canvas(element, {
               </div>
 
             </section>
-
-
 
             {/* Internal costs are visible to admins on screen, never in the PDF. */}
 
@@ -1980,15 +2030,11 @@ const canvas = await html2canvas(element, {
 
             )}
 
-
-
             {/* PRINT BUTTON */}
 
             {surfaces.length > 0 && (
 
               <div className="no-print mt-8 flex flex-wrap gap-4">
-
-
 
                 <button
 
@@ -2006,75 +2052,112 @@ const canvas = await html2canvas(element, {
 
                 </button>
 
-
 <button
+
   type="button"
+
   onClick={async () => {
+
     if (!selectedId || preparingPrint || photoLoading) return;
+    if (!requireCompleteMeasurements()) return;
 
     setPreparingPrint(true);
 
     try {
+
       const {
+
   data: { user },
+
   error: authError,
+
 } = await supabase.auth.getUser();
 
 console.log("Mercury PDF upload authentication:", {
+
   userId: user?.id ?? null,
+
   authError: authError?.message ?? null,
+
   projectId: selectedId,
+
 });
 
 if (authError || !user) {
+
   throw new Error("Please sign in to Mercury before saving an estimate.");
+
 }
+
       const pdfBlob = await generateEstimatePdf();
 
       const fileName = `estimate-${Date.now()}.pdf`;
+
       const filePath = `${selectedId}/${fileName}`;
 
       const { error } = await supabase.storage
+
         .from("mercury-project-estimates")
+
         .upload(filePath, pdfBlob, {
+
           contentType: "application/pdf",
+
           upsert: false,
+
         });
 
-  
 if (error) throw error;
 
 setSavedEstimates((current) => [
+
   {
+
     name: fileName,
+
     path: filePath,
+
     createdAt: new Date().toISOString(),
+
   },
+
   ...current.filter((item) => item.path !== filePath),
+
 ]);
 
 alert("Estimate PDF saved successfully to Mercury!");
 
     } catch (error) {
+
       console.error("Save estimate failed:", error);
 
       alert(
+
         error instanceof Error
+
           ? `Unable to save estimate: ${error.message}`
+
           : "Unable to save estimate."
+
       );
+
     } finally {
+
       setPreparingPrint(false);
+
     }
+
   }}
+
   disabled={!selectedId || preparingPrint || photoLoading}
+
   className="rounded-xl bg-emerald-600 px-8 py-5 font-black text-white shadow-lg hover:bg-emerald-700 disabled:opacity-50"
+
 >
+
   {preparingPrint ? "SAVING ESTIMATE..." : "☁️ SAVE TO MERCURY"}
+
 </button>
-
-
-
 
                 {canEdit && <Link
 
@@ -2098,21 +2181,13 @@ alert("Estimate PDF saved successfully to Mercury!");
 
       </section>
 
-
-
       {/* FOOTER — MATCHES OTHER PAGES */}
 
       <footer className="no-print mt-12 border-t-4 border-[#FFD400] bg-white px-5 py-8">
 
-
-
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5">
 
-
-
           <div className="flex items-center gap-3">
-
-
 
             <div className="relative h-16 w-24">
 
@@ -2132,8 +2207,6 @@ alert("Estimate PDF saved successfully to Mercury!");
 
             </div>
 
-
-
             <div className="border-l-2 border-[#FFD400] pl-3">
 
               <p className="font-black text-[#ED1C24]">
@@ -2146,8 +2219,6 @@ alert("Estimate PDF saved successfully to Mercury!");
 
           </div>
 
-
-
           <p className="text-xs text-gray-400">
 
             Developed by ECI — Emerald Coast Innovations
@@ -2157,8 +2228,6 @@ alert("Estimate PDF saved successfully to Mercury!");
         </div>
 
       </footer>
-
-
 
       {/* PRINT STYLES */}
 
@@ -2172,23 +2241,17 @@ alert("Estimate PDF saved successfully to Mercury!");
 
           }
 
-
-
           body {
 
             background: white !important;
 
           }
 
-
-
           .no-print {
 
             display: none !important;
 
           }
-
-
 
           main {
 
@@ -2198,8 +2261,6 @@ alert("Estimate PDF saved successfully to Mercury!");
 
           }
 
-
-
           main > section {
 
             padding: 0 !important;
@@ -2207,8 +2268,6 @@ alert("Estimate PDF saved successfully to Mercury!");
             max-width: none !important;
 
           }
-
-
 
           #printable-estimate {
 
@@ -2220,15 +2279,11 @@ alert("Estimate PDF saved successfully to Mercury!");
 
           }
 
-
-
           #printable-estimate table {
 
             width: 100%;
 
           }
-
-
 
           #printable-estimate tr {
 
@@ -2236,15 +2291,11 @@ alert("Estimate PDF saved successfully to Mercury!");
 
           }
 
-
-
           #printable-estimate h3 {
 
             break-after: avoid;
 
           }
-
-
 
           #printable-estimate {
 

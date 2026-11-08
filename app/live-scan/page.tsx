@@ -8,6 +8,7 @@ const PHOTO_BUCKET = "mercury-project-photos";
 
 type MercuryProject = {
   id: string;
+  owner_id: string;
   name: string | null;
   customer_name: string | null;
   address: string | null;
@@ -102,7 +103,7 @@ useEffect(() => {
 
       const { data, error } = await supabase
         .from("mercury_projects")
-        .select("id, name, customer_name, address")
+        .select("id, owner_id, name, customer_name, address")
         .order("name");
 
       if (!active) return;
@@ -662,8 +663,25 @@ if (!data || data.length === 0) {
   setError("Inspection approval was not saved. Please try again.");
   return;
 }
-  setApprovedInspection(true);
-  setMessage("Inspection approved and saved to Mercury.");
+
+const { error: transferError } = await supabase.rpc(
+  "mercury_add_approved_inspection",
+  {
+    p_inspection_id: inspectionId,
+  }
+);
+
+if (transferError) {
+  setError(
+    `Inspection approved, but could not be added to the project: ${transferError.message}`
+  );
+  return;
+}
+
+setApprovedInspection(true);
+setMessage(
+  "Inspection approved and added to the project walkthrough. Verify measurements before estimating."
+);
 }}
         className="rounded-lg bg-emerald-600 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
       >
