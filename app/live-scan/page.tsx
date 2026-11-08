@@ -538,7 +538,34 @@ setMessage(
             {message}
           </p>
         )}
+{approvedInspection && projectId && (
+  <div className="mt-5 rounded-xl border-2 border-emerald-500 bg-slate-900 p-5">
+    <h2 className="mb-3 text-xl font-black text-white">
+      ✓ INSPECTION APPROVED
+    </h2>
 
+    <p className="mb-4 text-sm text-slate-300">
+      Continue to your project estimate or verify measurements
+      before preparing the customer bid.
+    </p>
+
+    <div className="flex flex-col gap-3">
+      <a
+        href={`/estimates?projectId=${encodeURIComponent(projectId)}`}
+        className="rounded-xl bg-amber-400 px-6 py-4 text-center font-black text-slate-950"
+      >
+        CONTINUE TO ESTIMATE / BID →
+      </a>
+
+      <a
+        href={`/walkthrough?projectId=${encodeURIComponent(projectId)}`}
+        className="rounded-xl border border-emerald-400 px-6 py-4 text-center font-bold text-white"
+      >
+        VERIFY MEASUREMENTS →
+      </a>
+    </div>
+  </div>
+)}
 {inspection && (
   <section className="mt-5 rounded-xl border border-emerald-500 bg-slate-900 p-4 shadow-xl">
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
