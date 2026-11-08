@@ -1,0 +1,366 @@
+
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { supabase } from "../lib/supabase";
+
+const PHOTO_BUCKET = "mercury-project-photos";
+
+type MercuryProject = {
+  id: string;
+  name: string | null;
+  customer_name: string | null;
+  address: string | null;
+};
+
+export default function LiveScanPage() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const savingRef = useRef(false);
+
+  const [cameraOn, setCameraOn] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  const [projectId, setProjectId] = useState("");
+  const [projects, setProjects] = useState<MercuryProject[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(true);
+
+  const [savingPhoto, setSavingPhoto] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadProjects() {
+      const params = new URLSearchParams(window.location.search);
+      const initialProjectId = params.get("projectId") ?? "";
+
+      const { data, error } = await supabase
+        .from("mercury_projects")
+        .select("id, name, customer_name, address")
+        .order("name");
+
+      if (!active) return;
+
+      if (error) {
+        setError(`Unable to load projects: ${error.message}`);
+      } else {
+        const availableProjects = data ?? [];
+        setProjects(availableProjects);
+
+        if (
+          initialProjectId &&
+          availableProjects.some(
+            (project) => project.id === initialProjectId
+          )
+        ) {
+          setProjectId(initialProjectId);
+        }
+      }
+
+      setLoadingProjects(false);
+    }
+
+    void loadProjects();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function startCamera() {
+    setError("");
+    setMessage("");
+
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error(
+          "Camera access requires HTTPS or localhost."
+        );
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+
+      streamRef.current = stream;
+
+      if (!videoRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        throw new Error("Camera display is missing.");
+      }
+
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+
+      setCameraOn(true);
+    } catch (err) {
+      streamRef.current
+        ?.getTracks()
+        .forEach((track) => track.stop());
+
+      streamRef.current = null;
+
+      setError(
+        err instanceof Error ? err.message : "Camera failed."
+      );
+    }
+  }
+
+  async function markPhoto() {
+    if (savingRef.current) return;
+
+    setError("");
+    setMessage("");
+
+    if (!projectId) {
+      setError("Select a Mercury project before taking a photo.");
+      return;
+    }
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (!video || !canvas) {
+      setError("Camera or canvas is missing.");
+      return;
+    }
+
+    if (video.readyState < 2 || video.videoWidth === 0) {
+      setError("Camera is not ready. Try again.");
+      return;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      setError("Unable to capture photo.");
+      return;
+    }
+
+    context.drawImage(
+      video,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+
+    savingRef.current = true;
+    setSavingPhoto(true);
+
+    try {
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(
+          (result) => {
+            if (result) {
+              resolve(result);
+            } else {
+              reject(new Error("Photo capture failed."));
+            }
+          },
+          "image/jpeg",
+          0.9
+        );
+      });
+
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) {
+        throw new Error("Please sign in to save project photos.");
+      }
+
+      const path = `${projectId}/${crypto.randomUUID()}.jpg`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(PHOTO_BUCKET)
+        .upload(path, blob, {
+          contentType: "image/jpeg",
+          upsert: false,
+        });
+
+      if (uploadError) {
+        throw new Error(
+          `Photo upload failed: ${uploadError.message}`
+        );
+      }
+
+      setMessage(
+        "Photo saved successfully! It is now in the selected Mercury project's photo storage."
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to save photo."
+      );
+    } finally {
+      savingRef.current = false;
+      setSavingPhoto(false);
+    }
+  }
+
+  function stopCamera() {
+    streamRef.current
+      ?.getTracks()
+      .forEach((track) => track.stop());
+
+    streamRef.current = null;
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    setCameraOn(false);
+  }
+
+  useEffect(() => {
+    return () => {
+      streamRef.current
+        ?.getTracks()
+        .forEach((track) => track.stop());
+    };
+  }, []);
+
+  return (
+    <main className="min-h-screen bg-slate-950 p-4 text-white">
+      <div className="mx-auto max-w-4xl">
+        <h1 className="mb-2 text-3xl font-bold">
+          Mercury LiveScan
+        </h1>
+
+        <p className="mb-5 text-slate-300">
+          Live AI Painting Inspection
+        </p>
+
+        <div className="mb-4 rounded-lg border border-slate-700 bg-slate-900 p-4">
+          <label
+            htmlFor="project-select"
+            className="block text-sm font-semibold text-slate-200"
+          >
+            Select Mercury Project
+          </label>
+
+          <select
+            id="project-select"
+            value={projectId}
+            onChange={(event) => {
+              setProjectId(event.target.value);
+              setError("");
+              setMessage("");
+            }}
+            disabled={loadingProjects || savingPhoto}
+            className="mt-2 w-full rounded-lg border border-slate-600 bg-slate-800 p-3 text-white"
+          >
+            <option value="">
+              {loadingProjects
+                ? "Loading projects..."
+                : "Choose a project"}
+            </option>
+
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name || "Unnamed Project"}
+                {project.customer_name
+                  ? ` — ${project.customer_name}`
+                  : ""}
+                {project.address
+                  ? ` — ${project.address}`
+                  : ""}
+              </option>
+            ))}
+          </select>
+
+          {!loadingProjects && projects.length === 0 && (
+            <p className="mt-2 text-sm text-amber-300">
+              No accessible projects found. Create a project or
+              check your account permissions.
+            </p>
+          )}
+
+          {projectId && (
+            <p className="mt-2 text-sm text-emerald-300">
+              Project selected. Photos will be saved here.
+            </p>
+          )}
+        </div>
+
+        <div className="relative overflow-hidden rounded-xl border border-slate-700 bg-black">
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="aspect-video w-full object-contain"
+          />
+
+          {!cameraOn && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+              <span className="text-slate-300">
+                Camera is off
+              </span>
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <p className="mt-4 rounded-lg bg-red-900 p-3 text-red-100">
+            {error}
+          </p>
+        )}
+
+        {message && (
+          <p className="mt-4 rounded-lg bg-emerald-900 p-3 text-emerald-100">
+            {message}
+          </p>
+        )}
+
+        <div className="mt-5 flex flex-wrap gap-3">
+          {!cameraOn ? (
+            <button
+              onClick={startCamera}
+              disabled={!projectId}
+              className="rounded-lg bg-emerald-600 px-6 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Start Camera
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={markPhoto}
+                disabled={savingPhoto || !projectId}
+                className="rounded-lg bg-amber-500 px-6 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {savingPhoto ? "Saving..." : "MARK PHOTO"}
+              </button>
+
+              <button
+                onClick={stopCamera}
+                className="rounded-lg bg-red-600 px-6 py-3 font-semibold text-white"
+              >
+                Stop Camera
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      <canvas
+        ref={canvasRef}
+        style={{ display: "none" }}
+      />
+    </main>
+  );
+}
