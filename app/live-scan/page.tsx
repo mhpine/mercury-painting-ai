@@ -29,6 +29,23 @@ export default function LiveScanPage() {
 
   const [savingPhoto, setSavingPhoto] = useState(false);
 
+type InspectionFindings = {
+  name: string;
+  category: string;
+  condition: string;
+  preparation: string;
+  coats: string;
+  notes: string;
+};
+
+const [inspection, setInspection] = useState<{
+  analysis: string;
+  findings: InspectionFindings;
+} | null>(null);
+
+const [editingInspection, setEditingInspection] = useState(false);
+const [approvedInspection, setApprovedInspection] = useState(false);
+
   useEffect(() => {
     let active = true;
 
@@ -275,16 +292,26 @@ try {
 
   const imageDataUrl = aiCanvas.toDataURL("image/jpeg", 0.7);
 
-  const result = await analyzeLiveScanPhoto(
-    imageDataUrl,
-    projectId
-  );
+ 
+const result = await analyzeLiveScanPhoto(
+  imageDataUrl,
+  projectId
+);
 
-  setMessage(
-    `Photo saved! AI findings: ${result.analysis} ` +
-    `Condition: ${result.findings.condition}. ` +
-    `Preparation: ${result.findings.preparation}.`
-  );
+// Store the AI findings for the inspection panel.
+setInspection({
+  analysis: result.analysis,
+  findings: { ...result.findings },
+});
+
+// Every new inspection requires painter review.
+setEditingInspection(false);
+setApprovedInspection(false);
+
+setMessage(
+  "Photo saved! AI inspection complete. Review the findings below."
+);
+
 } catch (aiError) {
   setMessage(
     "Photo saved successfully, but AI analysis could not be completed."
@@ -296,7 +323,9 @@ try {
       : "AI analysis failed."
   );
 }
-
+setInspection(null);
+setEditingInspection(false);
+setApprovedInspection(false);
     } catch (err) {
       setError(
         err instanceof Error
@@ -423,6 +452,114 @@ try {
             {message}
           </p>
         )}
+
+{inspection && (
+  <section className="mt-5 rounded-xl border border-emerald-500 bg-slate-900 p-4 shadow-xl">
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+      <h2 className="text-xl font-black text-white">
+        🔍 MERCURY AI INSPECTION
+      </h2>
+
+      <span className={`rounded-full px-3 py-1 text-xs font-bold ${
+        approvedInspection
+          ? "bg-emerald-600 text-white"
+          : "bg-amber-400 text-black"
+      }`}>
+        {approvedInspection ? "APPROVED" : "AWAITING REVIEW"}
+      </span>
+    </div>
+
+    <p className="mb-4 text-sm text-slate-300">
+      AI-generated suggestions. Verify conditions on site before approval.
+    </p>
+
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {(
+        [
+          ["name", "Surface"],
+          ["category", "Category"],
+          ["condition", "Condition"],
+          ["preparation", "Preparation"],
+          ["coats", "Recommended Coats"],
+          ["notes", "Inspection Notes"],
+        ] as const
+      ).map(([field, label]) => (
+        <div
+          key={field}
+          className="rounded-lg border border-slate-700 bg-slate-800 p-3"
+        >
+          <label className="mb-2 block text-xs font-bold uppercase text-amber-400">
+            {label}
+          </label>
+
+          {editingInspection ? (
+            <textarea
+              value={inspection.findings[field]}
+              onChange={(event) => {
+                setInspection((current) =>
+                  current
+                    ? {
+                        ...current,
+                        findings: {
+                          ...current.findings,
+                          [field]: event.target.value,
+                        },
+                      }
+                    : null
+                );
+                setApprovedInspection(false);
+              }}
+              rows={field === "notes" ? 3 : 2}
+              className="w-full rounded-lg border border-slate-600 bg-slate-950 p-2 text-sm text-white"
+            />
+          ) : (
+            <p className="whitespace-pre-wrap text-sm text-white">
+              {inspection.findings[field] || "Not specified"}
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+
+    {inspection.analysis && (
+      <div className="mt-4 rounded-lg bg-slate-800 p-3">
+        <h3 className="mb-2 text-sm font-bold text-amber-400">
+          AI Analysis
+        </h3>
+        <p className="whitespace-pre-wrap text-sm text-slate-200">
+          {inspection.analysis}
+        </p>
+      </div>
+    )}
+
+    <div className="mt-5 flex flex-wrap gap-3">
+      <button
+        type="button"
+        onClick={() => {
+          setEditingInspection((current) => !current);
+          setApprovedInspection(false);
+        }}
+        className="rounded-lg border border-amber-400 px-5 py-3 font-bold text-amber-400"
+      >
+        {editingInspection ? "DONE EDITING" : "✏️ EDIT FINDINGS"}
+      </button>
+
+      <button
+        type="button"
+        disabled={editingInspection || approvedInspection}
+        onClick={() => setApprovedInspection(true)}
+        className="rounded-lg bg-emerald-600 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {approvedInspection ? "✓ APPROVED" : "✓ APPROVE FINDINGS"}
+      </button>
+    </div>
+
+    <p className="mt-3 text-xs text-slate-400">
+      Approval is currently for this session only.
+      Findings are not yet saved to the project estimate.
+    </p>
+  </section>
+)}
 
         <div className="mt-5 flex flex-wrap gap-3">
           {!cameraOn ? (
