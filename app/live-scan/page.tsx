@@ -706,8 +706,13 @@ if (transferError) {
 }
 
 setApprovedInspection(true);
-setMessage(
-  "Inspection approved and added to the project walkthrough. Verify measurements before estimating."
+setMessage("Inspection saved. Opening project...");
+
+// Move directly into the correct project walkthrough.
+stopCamera();
+
+window.location.assign(
+  `/walkthrough?projectId=${encodeURIComponent(projectId)}`
 );
 }}
         className="rounded-lg bg-emerald-600 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
