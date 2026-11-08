@@ -348,12 +348,14 @@ export default function Home() {
 
             <div className="mt-9 flex flex-wrap gap-4">
 
-              <Link
-                href="/walkthrough"
-                className="inline-flex min-h-16 items-center justify-center gap-3 rounded-xl bg-[#ED1C24] px-7 py-4 text-sm font-black text-white shadow-xl transition hover:bg-red-700 sm:text-base"
-              >
-                📷 START AI WALKTHROUGH →
-              </Link>
+              
+<Link
+  href="/projects"
+  className="inline-flex min-h-16 items-center justify-center gap-3 rounded-xl bg-[#ED1C24] px-7 py-4 text-sm font-black text-white shadow-xl transition hover:bg-red-700 sm:text-base"
+>
+  📁 VIEW PROJECTS →
+</Link>
+
 
               <Link
                 href="/projects/new"

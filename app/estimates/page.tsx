@@ -236,6 +236,84 @@ export default function EstimatesPage() {
 
   const [preparingPrint, setPreparingPrint] = useState(false);
 
+const [savedEstimates, setSavedEstimates] = useState<
+  {
+    name: string;
+    path: string;
+    createdAt: string;
+  }[]
+>([]);
+
+const [savedEstimatesLoading, setSavedEstimatesLoading] =
+  useState(false);
+
+const [savedEstimatesError, setSavedEstimatesError] =
+  useState("");
+
+useEffect(() => {
+  let active = true;
+
+  async function loadSavedEstimates() {
+    setSavedEstimates([]);
+    setSavedEstimatesError("");
+
+    if (!selectedId) {
+      setSavedEstimatesLoading(false);
+      return;
+    }
+
+    setSavedEstimatesLoading(true);
+
+    try {
+      const { data, error } = await supabase.storage
+        .from("mercury-project-estimates")
+        .list(selectedId, {
+          limit: 100,
+          sortBy: {
+            column: "created_at",
+            order: "desc",
+          },
+        });
+
+      if (error) throw error;
+
+      console.log("MERCURY SAVED ESTIMATES:", data);
+
+      if (active) {
+        setSavedEstimates(
+          (data ?? [])
+            .filter((file) =>
+              file.name.toLowerCase().endsWith(".pdf")
+            )
+            .map((file) => ({
+              name: file.name,
+              path: `${selectedId}/${file.name}`,
+              createdAt: file.created_at ?? "",
+            }))
+        );
+      }
+    } catch (error) {
+      if (active) {
+        setSavedEstimatesError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load saved estimates."
+        );
+      }
+    } finally {
+      if (active) {
+        setSavedEstimatesLoading(false);
+      }
+    }
+  }
+
+  void loadSavedEstimates();
+
+  return () => {
+    active = false;
+  };
+}, [selectedId]);
+
 
 
   useEffect(() => {
@@ -628,6 +706,119 @@ export default function EstimatesPage() {
     }
 
   }
+
+async function generateEstimatePdf(): Promise<Blob> {
+  const element = document.getElementById("printable-estimate");
+
+  if (!element) {
+    throw new Error("Customer estimate layout was not found.");
+  }
+
+  // Load the PDF libraries only when needed.
+  const [{ default: html2canvas }, { jsPDF }] =
+    await Promise.all([
+      import("html2canvas-pro"),
+      import("jspdf"),
+    ]);
+
+  // Wait for estimate photographs and logo to load.
+  const images = Array.from(element.querySelectorAll("img"));
+
+  await Promise.all(
+    images.map((img) => {
+      if (img.complete) return Promise.resolve();
+
+      return new Promise<void>((resolve) => {
+        img.addEventListener("load", () => resolve(), {
+          once: true,
+        });
+        img.addEventListener("error", () => resolve(), {
+          once: true,
+        });
+      });
+    })
+  );
+
+  
+const canvas = await html2canvas(element, {
+  scale: 1.5,
+  useCORS: true,
+  backgroundColor: "#ffffff",
+  logging: false,
+  windowWidth: Math.max(
+    document.documentElement.clientWidth,
+    element.scrollWidth
+  ),
+  onclone: (clonedDocument) => {
+    const style = clonedDocument.createElement("style");
+
+    style.textContent = `
+      #printable-estimate,
+      #printable-estimate * {
+        border-color: #e5e7eb;
+        outline-color: #e5e7eb;
+        text-decoration-color: currentColor;
+      }
+    `;
+
+    clonedDocument.head.appendChild(style);
+  },
+});
+
+
+  const pdf = new jsPDF({
+    orientation: "portrait",
+    unit: "mm",
+    format: "a4",
+    compress: true,
+  });
+
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+
+  const margin = 10;
+  const usableWidth = pageWidth - margin * 2;
+  const usableHeight = pageHeight - margin * 2;
+
+  const imageWidth = usableWidth;
+  const imageHeight =
+    (canvas.height * imageWidth) / canvas.width;
+
+  const imageData = canvas.toDataURL("image/jpeg", 0.85);
+
+  let remainingHeight = imageHeight;
+  let position = margin;
+
+  pdf.addImage(
+    imageData,
+    "JPEG",
+    margin,
+    position,
+    imageWidth,
+    imageHeight
+  );
+
+  remainingHeight -= usableHeight;
+
+  while (remainingHeight > 0) {
+    position -= usableHeight;
+
+    pdf.addPage();
+
+    pdf.addImage(
+      imageData,
+      "JPEG",
+      margin,
+      position,
+      imageWidth,
+      imageHeight
+    );
+
+    remainingHeight -= usableHeight;
+  }
+
+  return pdf.output("blob");
+}
 
 
 
@@ -1286,6 +1477,73 @@ export default function EstimatesPage() {
 
             </section>
 
+{/* SAVED ESTIMATES */}
+<section className="mt-8 rounded-2xl border border-gray-200 bg-white p-6 shadow-md">
+  <div className="mb-5">
+    <h2 className="text-2xl font-black text-gray-900">
+      📁 Saved Estimates
+    </h2>
+    <p className="mt-1 text-sm text-gray-600">
+      Previously saved PDF estimates for this project.
+    </p>
+  </div>
+
+  {savedEstimatesLoading ? (
+    <p className="text-gray-500">Loading saved estimates...</p>
+  ) : savedEstimatesError ? (
+    <p className="text-red-600">{savedEstimatesError}</p>
+  ) : savedEstimates.length === 0 ? (
+    <p className="text-gray-500">
+      No saved estimates yet. Use SAVE TO MERCURY to save one.
+    </p>
+  ) : (
+    <div className="space-y-3">
+      {savedEstimates.map((estimate) => (
+        <div
+          key={estimate.path}
+          className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-gray-200 p-4"
+        >
+          <div>
+            <p className="font-bold text-gray-900">
+              📄 {estimate.name}
+            </p>
+            <p className="mt-1 text-sm text-gray-500">
+              {estimate.createdAt
+                ? new Date(estimate.createdAt).toLocaleString()
+                : "Saved estimate"}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={async () => {
+              const { data, error } = await supabase.storage
+                .from("mercury-project-estimates")
+                .createSignedUrl(estimate.path, 60);
+
+              if (error || !data?.signedUrl) {
+                alert(
+                  error?.message ?? "Unable to open saved estimate."
+                );
+                return;
+              }
+
+              window.open(
+                data.signedUrl,
+                "_blank",
+                "noopener,noreferrer"
+              );
+            }}
+            className="rounded-xl bg-gray-900 px-5 py-3 font-bold text-white hover:bg-gray-700"
+          >
+            OPEN PDF
+          </button>
+        </div>
+      ))}
+    </div>
+  )}
+</section>
+
 
 
             {/* CUSTOMER ESTIMATE */}
@@ -1747,6 +2005,74 @@ export default function EstimatesPage() {
                   {preparingPrint ? "PREPARING PDF..." : "🖨️ PRINT / SAVE AS PDF"}
 
                 </button>
+
+
+<button
+  type="button"
+  onClick={async () => {
+    if (!selectedId || preparingPrint || photoLoading) return;
+
+    setPreparingPrint(true);
+
+    try {
+      const {
+  data: { user },
+  error: authError,
+} = await supabase.auth.getUser();
+
+console.log("Mercury PDF upload authentication:", {
+  userId: user?.id ?? null,
+  authError: authError?.message ?? null,
+  projectId: selectedId,
+});
+
+if (authError || !user) {
+  throw new Error("Please sign in to Mercury before saving an estimate.");
+}
+      const pdfBlob = await generateEstimatePdf();
+
+      const fileName = `estimate-${Date.now()}.pdf`;
+      const filePath = `${selectedId}/${fileName}`;
+
+      const { error } = await supabase.storage
+        .from("mercury-project-estimates")
+        .upload(filePath, pdfBlob, {
+          contentType: "application/pdf",
+          upsert: false,
+        });
+
+  
+if (error) throw error;
+
+setSavedEstimates((current) => [
+  {
+    name: fileName,
+    path: filePath,
+    createdAt: new Date().toISOString(),
+  },
+  ...current.filter((item) => item.path !== filePath),
+]);
+
+alert("Estimate PDF saved successfully to Mercury!");
+
+    } catch (error) {
+      console.error("Save estimate failed:", error);
+
+      alert(
+        error instanceof Error
+          ? `Unable to save estimate: ${error.message}`
+          : "Unable to save estimate."
+      );
+    } finally {
+      setPreparingPrint(false);
+    }
+  }}
+  disabled={!selectedId || preparingPrint || photoLoading}
+  className="rounded-xl bg-emerald-600 px-8 py-5 font-black text-white shadow-lg hover:bg-emerald-700 disabled:opacity-50"
+>
+  {preparingPrint ? "SAVING ESTIMATE..." : "☁️ SAVE TO MERCURY"}
+</button>
+
 
 
 
