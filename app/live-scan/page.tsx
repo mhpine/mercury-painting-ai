@@ -113,6 +113,52 @@ export default function LiveScanPage() {
     }
   }
 
+async function analyzeLiveScanPhoto(
+  imageDataUrl: string,
+  selectedProjectId: string
+) {
+  const {
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
+
+  if (sessionError || !session?.access_token) {
+    throw new Error("Please sign in before using AI analysis.");
+  }
+
+  const response = await fetch("/api/analyze", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({
+      projectId: selectedProjectId,
+      imageDataUrl,
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      result.error || "Mercury AI analysis failed."
+    );
+  }
+
+  return result as {
+    analysis: string;
+    findings: {
+      name: string;
+      category: string;
+      condition: string;
+      preparation: string;
+      coats: string;
+      notes: string;
+    };
+  };
+}
+
   async function markPhoto() {
     if (savingRef.current) return;
 
@@ -197,9 +243,60 @@ export default function LiveScanPage() {
         );
       }
 
-      setMessage(
-        "Photo saved successfully! It is now in the selected Mercury project's photo storage."
-      );
+      
+setMessage("Photo saved! Mercury AI is analyzing the surface...");
+
+try {
+  // Use a separate, compressed image for AI analysis.
+  // The original photo has already been saved to Supabase.
+  const aiCanvas = document.createElement("canvas");
+  const maxDimension = 1280;
+  const scale = Math.min(
+    1,
+    maxDimension / Math.max(canvas.width, canvas.height)
+  );
+
+  aiCanvas.width = Math.round(canvas.width * scale);
+  aiCanvas.height = Math.round(canvas.height * scale);
+
+  const aiContext = aiCanvas.getContext("2d");
+
+  if (!aiContext) {
+    throw new Error("Unable to prepare photo for AI.");
+  }
+
+  aiContext.drawImage(
+    canvas,
+    0,
+    0,
+    aiCanvas.width,
+    aiCanvas.height
+  );
+
+  const imageDataUrl = aiCanvas.toDataURL("image/jpeg", 0.7);
+
+  const result = await analyzeLiveScanPhoto(
+    imageDataUrl,
+    projectId
+  );
+
+  setMessage(
+    `Photo saved! AI findings: ${result.analysis} ` +
+    `Condition: ${result.findings.condition}. ` +
+    `Preparation: ${result.findings.preparation}.`
+  );
+} catch (aiError) {
+  setMessage(
+    "Photo saved successfully, but AI analysis could not be completed."
+  );
+
+  setError(
+    aiError instanceof Error
+      ? aiError.message
+      : "AI analysis failed."
+  );
+}
+
     } catch (err) {
       setError(
         err instanceof Error
