@@ -392,9 +392,14 @@ export default function ProjectsPage() {
                     )}
                   </div>
 
-                  <span className="rounded-full border border-yellow-300 bg-yellow-50 px-4 py-2 text-sm font-bold text-[#292D32]">
-                    {project.status || "Draft"}
-                  </span>
+                 
+<Link
+  href={`/estimates?projectId=${encodeURIComponent(project.id)}`}
+  className="inline-flex items-center justify-center rounded-full border border-yellow-300 bg-yellow-50 px-4 py-2 text-sm font-bold text-[#292D32] transition hover:bg-yellow-100 active:scale-95"
+>
+  {project.status || "Draft"} →
+</Link>
+
                 </div>
 
                 {project.description && (
