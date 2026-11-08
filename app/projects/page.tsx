@@ -408,12 +408,14 @@ export default function ProjectsPage() {
                     Created: {formatDate(project.createdAt)}
                   </p>
 
-                  <Link
-  href="/walkthrough"
+        
+<Link
+  href="/live-scan"
   className="inline-flex items-center gap-2 rounded-xl bg-[#ED1C24] px-5 py-3 text-sm font-black text-white shadow-md transition hover:bg-red-700"
 >
-  📷 START AI WALKTHROUGH →
+  📷 LIVE AI SCAN →
 </Link>
+
                 </div>
               </div>
             ))
