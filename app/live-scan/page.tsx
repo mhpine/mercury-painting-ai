@@ -538,34 +538,7 @@ setMessage(
             {message}
           </p>
         )}
-{approvedInspection && projectId && (
-  <div className="mt-5 rounded-xl border-2 border-emerald-500 bg-slate-900 p-5">
-    <h2 className="mb-3 text-xl font-black text-white">
-      ✓ INSPECTION APPROVED
-    </h2>
 
-    <p className="mb-4 text-sm text-slate-300">
-      Continue to your project estimate or verify measurements
-      before preparing the customer bid.
-    </p>
-
-    <div className="flex flex-col gap-3">
-      <a
-        href={`/estimates?projectId=${encodeURIComponent(projectId)}`}
-        className="rounded-xl bg-amber-400 px-6 py-4 text-center font-black text-slate-950"
-      >
-        CONTINUE TO ESTIMATE / BID →
-      </a>
-
-      <a
-        href={`/walkthrough?projectId=${encodeURIComponent(projectId)}`}
-        className="rounded-xl border border-emerald-400 px-6 py-4 text-center font-bold text-white"
-      >
-        VERIFY MEASUREMENTS →
-      </a>
-    </div>
-  </div>
-)}
 <div className="mt-5 flex flex-wrap gap-3">
   {!cameraOn ? (
     <button
@@ -758,35 +731,7 @@ setMessage(
   </section>
 )}
 
-        <div className="mt-5 flex flex-wrap gap-3">
-          {!cameraOn ? (
-            <button
-              onClick={startCamera}
-              disabled={!projectId}
-              className="rounded-lg bg-emerald-600 px-6 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Start Camera
-            </button>
-          ) : (
-            <>
-              <button
-                onClick={markPhoto}
-                disabled={savingPhoto || !projectId}
-                className="rounded-lg bg-amber-500 px-6 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {savingPhoto ? "Saving..." : "MARK PHOTO"}
-              </button>
-
-              <button
-                onClick={stopCamera}
-                className="rounded-lg bg-red-600 px-6 py-3 font-semibold text-white"
-              >
-                Stop Camera
-              </button>
-            </>
-          )}
-        </div>
-      </div>
+    </div>  
 
       <canvas
         ref={canvasRef}
