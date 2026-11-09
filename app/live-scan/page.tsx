@@ -566,7 +566,38 @@ setMessage(
     </div>
   </div>
 )}
-{inspection && (
+<div className="mt-5 flex flex-wrap gap-3">
+  {!cameraOn ? (
+    <button
+      type="button"
+      onClick={startCamera}
+      disabled={!projectId}
+      className="rounded-lg bg-emerald-600 px-6 py-3 font-bold text-white disabled:opacity-50"
+    >
+      START CAMERA
+    </button>
+  ) : (
+    <>
+      <button
+        type="button"
+        onClick={markPhoto}
+        disabled={savingPhoto || !projectId}
+        className="rounded-lg bg-amber-500 px-6 py-3 font-bold text-black disabled:opacity-50"
+      >
+        {savingPhoto ? "ANALYZING..." : "MARK PHOTO"}
+      </button>
+
+      <button
+        type="button"
+        onClick={stopCamera}
+        className="rounded-lg bg-red-600 px-6 py-3 font-bold text-white"
+      >
+        STOP CAMERA
+      </button>
+    </>
+  )}
+</div>
+{inspection && !approvedInspection && (
   <section className="mt-5 rounded-xl border border-emerald-500 bg-slate-900 p-4 shadow-xl">
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
       <h2 className="text-xl font-black text-white">
@@ -708,11 +739,10 @@ if (transferError) {
 setApprovedInspection(true);
 setMessage("Inspection saved. Opening project...");
 
-// Move directly into the correct project walkthrough.
-stopCamera();
-
-window.location.assign(
-  `/walkthrough?projectId=${encodeURIComponent(projectId)}`
+setApprovedInspection(true);
+setEditingInspection(false);
+setMessage(
+  "Inspection approved and saved to the project. Camera ready for the next surface."
 );
 }}
         className="rounded-lg bg-emerald-600 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
