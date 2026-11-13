@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabase";
 
 const PHOTO_BUCKET = "mercury-project-photos";
@@ -15,6 +16,8 @@ type MercuryProject = {
 };
 
 export default function LiveScanPage() {
+  const searchParams = useSearchParams();
+const activeProjectId = searchParams.get("projectId");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -25,6 +28,11 @@ export default function LiveScanPage() {
   const [message, setMessage] = useState("");
 
   const [projectId, setProjectId] = useState("");
+  useEffect(() => {
+  if (activeProjectId) {
+    setProjectId(activeProjectId);
+  }
+}, [activeProjectId]);
   const [projects, setProjects] = useState<MercuryProject[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
 
@@ -133,7 +141,22 @@ useEffect(() => {
       active = false;
     };
   }, []);
+const autoStartedProjectRef = useRef<string | null>(null);
 
+useEffect(() => {
+  if (!activeProjectId || activeProjectId !== projectId) return;
+
+  // Attempt automatic startup only once per project.
+  if (autoStartedProjectRef.current === projectId) return;
+
+  autoStartedProjectRef.current = projectId;
+
+  if (!streamRef.current) {
+    void startCamera();
+  }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [activeProjectId, projectId]);
   async function startCamera() {
     setError("");
     setMessage("");
@@ -444,7 +467,7 @@ setMessage(
         <p className="mb-5 text-slate-300">
           Live AI Painting Inspection
         </p>
-
+{!activeProjectId && (
         <div className="mb-4 rounded-lg border border-slate-700 bg-slate-900 p-4">
           <label
             htmlFor="project-select"
@@ -508,7 +531,7 @@ setMessage(
             </p>
           )}
         </div>
-
+)}
         <div className="relative overflow-hidden rounded-xl border border-slate-700 bg-black">
           <video
             ref={videoRef}

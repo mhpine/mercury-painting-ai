@@ -415,7 +415,7 @@ export default function ProjectsPage() {
 
         
 <Link
-  href="/live-scan"
+ href={`/live-scan?projectId=${encodeURIComponent(project.id)}`}
   className="inline-flex items-center gap-2 rounded-xl bg-[#ED1C24] px-5 py-3 text-sm font-black text-white shadow-md transition hover:bg-red-700"
 >
   📷 LIVE AI SCAN →
