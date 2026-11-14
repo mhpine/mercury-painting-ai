@@ -330,6 +330,9 @@ export default function WalkthroughPage() {
   }
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
+  const liveScanUrl = selectedProjectId
+  ? `/live-scan?projectId=${encodeURIComponent(selectedProjectId)}`
+  : "/live-scan";
   const totalSquareFeet = surfaces.reduce((sum, s) => sum + s.squareFeet, 0);
   const totalPaintArea = surfaces.reduce(
     (sum, s) => sum + s.squareFeet * s.coats, 0
@@ -709,6 +712,17 @@ export default function WalkthroughPage() {
             Document painting surfaces, record photos and measurements,
             and subtract doors and windows automatically.
           </p>
+          <div className="mt-6">
+  <Link
+    href={liveScanUrl}
+    className="inline-flex w-full items-center justify-center gap-3 rounded-xl bg-[#ED1C24] px-6 py-4 text-center text-base font-black text-white shadow-lg transition hover:bg-red-700 sm:w-auto"
+  >
+    📷 LAUNCH LIVE AI CAMERA
+  </Link>
+  <p className="mt-2 text-sm text-gray-500">
+    Open the live painting inspection camera for this project.
+  </p>
+</div>
           <div className="mt-6 h-2 w-28 bg-[#FFD400]" />
         </div>
 
