@@ -119,8 +119,9 @@ export default function MercuryCamera({
         setSensorStatus("motion");
       }
       if (Math.abs(x) > 6.5 && Math.abs(x) > Math.abs(y) * 1.25) {
-        // The lowered physical side is the new bottom edge.
-        report(x > 0 ? "right" : "left");
+        // accelerationIncludingGravity measures G-force opposite gravity.
+        // Positive X means the LEFT edge is physically DOWN; U2 had this reversed.
+        report(x > 0 ? "left" : "right");
       } else if (Math.abs(y) > 6.5 && Math.abs(y) > Math.abs(x) * 1.25) {
         report("portrait");
       }
@@ -492,6 +493,9 @@ export default function MercuryCamera({
     }
   }
 
+  // U3 orientation fix: device motion G-force sign now matches the device
+  // orientation (gamma) fallback, so automatic side selection cannot put MARK
+  // on the upper physical edge when the display remains portrait locked.
   // This dock is an entire *horizontal bar* (zoom - / MARK / zoom +).
   // When the handset is physically sideways but the viewport stays portrait,
   // rotate the whole bar and center MARK on the physical bottom (left/right).
@@ -552,7 +556,7 @@ export default function MercuryCamera({
         style={{ paddingTop: "env(safe-area-inset-top)" }}
       >
         <span className="max-w-[34%] shrink rounded-full bg-black/60 px-2 py-2 text-[10px] font-bold tracking-wide sm:px-3 sm:text-xs">
-          MERCURY CAMERA · U2
+          MERCURY CAMERA · U3
         </span>
 
         <div className="flex shrink-0 items-center gap-1">
@@ -597,7 +601,7 @@ export default function MercuryCamera({
         <div className="absolute inset-0 z-10 flex items-center justify-center px-4 text-center">
           <div className="w-full max-w-sm rounded-xl bg-black/80 p-4">
             <p className="mb-3 text-sm font-bold">
-              {opening ? "Connecting to phone camera…" : "Mercury camera · U2 (manual start)"}
+              {opening ? "Connecting to phone camera…" : "Mercury camera · U3"}
             </p>
             {error && (
               <p role="alert" className="mb-3 break-words rounded-lg bg-red-950 p-3 text-left text-sm text-red-100">
@@ -606,19 +610,18 @@ export default function MercuryCamera({
             )}
             {!opening && (
               <div className="flex flex-col gap-2">
+                {/* Exactly one startup action. C4's manual start avoids the
+                    repeated mobile requests that caused video-source errors. */}
                 <button type="button" onClick={() => void start("rear")}
                   className="rounded-lg bg-amber-400 px-4 py-3 font-bold text-black">
-                  Start rear camera
+                  START CAMERA
                 </button>
-                <button type="button" onClick={() => void start("basic")}
-                  className="rounded-lg border border-white/70 bg-slate-800 px-4 py-3 font-semibold text-white">
-                  Test basic camera
-                </button>
-                <button type="button" disabled={disabled || busy}
+                {/* Native camera is available only if WebRTC actually fails. */}
+                {error && <button type="button" disabled={disabled || busy}
                   onClick={() => nativeCaptureRef.current?.click()}
                   className="rounded-lg border border-white/60 px-4 py-3 font-semibold text-white disabled:opacity-50">
-                  Take a photo using phone camera instead
-                </button>
+                  USE PHONE CAMERA INSTEAD
+                </button>}
               </div>
             )}
           </div>
