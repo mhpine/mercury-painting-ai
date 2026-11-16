@@ -50,6 +50,8 @@ export default function MercuryCamera({
   type PhysicalTurn = "portrait" | "right" | "left";
   const [physicalTurn, setPhysicalTurn] = useState<PhysicalTurn>("portrait");
   const [manualTurn, setManualTurn] = useState<PhysicalTurn | null>(null);
+  const [sensorStatus, setSensorStatus] = useState<"waiting" | "motion" | "orientation">("waiting");
+  const [sensorNotice, setSensorNotice] = useState("");
 
   // The browser viewport can change while the camera is open (rotation,
   // browser chrome appearing/disappearing, or Android entering fullscreen).
@@ -78,58 +80,68 @@ export default function MercuryCamera({
     };
   }, []);
 
-  // Listen to the phone's *physical* position, not screen.orientation.angle.
-  // The browser may stay portrait-locked while the hardware is turned sideways.
-  // Motion events can be restricted by browser privacy settings, so provide a
-  // manual control-position fallback in the header as well.
+  // Use the accelerometer for the physical bottom edge even when the browser
+  // screen stays portrait-locked. Orientation data is a fallback when gravity
+  // events are unavailable. Neither handler touches the video stream.
   useEffect(() => {
     let stable: PhysicalTurn = "portrait";
-    let candidate: PhysicalTurn | null = null;
-    let candidateSince = 0;
+    let pending: PhysicalTurn | null = null;
+    let pendingSince = 0;
     let lastGravityReading = 0;
+    let sensor: "waiting" | "motion" | "orientation" = "waiting";
 
-    const consider = (turn: PhysicalTurn | null) => {
-      if (!turn || turn === stable) { candidate = null; return; }
-      const now = Date.now();
-      if (candidate !== turn) { candidate = turn; candidateSince = now; return; }
-      if (now - candidateSince >= 500) {
-        stable = turn;
-        candidate = null;
-        setPhysicalTurn(turn);
+    function report(next: PhysicalTurn | null) {
+      if (!next) return; // Ignore flat, diagonal, and unreliable readings.
+      if (next === stable) {
+        pending = null;
+        return;
       }
-    };
+      const now = Date.now();
+      if (pending !== next) {
+        pending = next;
+        pendingSince = now;
+      } else if (now - pendingSince >= 350) {
+        stable = next;
+        pending = null;
+        setPhysicalTurn(next);
+      }
+    }
 
-    const onMotion = (event: DeviceMotionEvent) => {
-      const gravity = event.accelerationIncludingGravity;
-      if (!gravity || gravity.x == null || gravity.y == null) return;
-      const x = gravity.x;
-      const y = gravity.y;
+    function onMotion(event: DeviceMotionEvent) {
+      const g = event.accelerationIncludingGravity;
+      if (g?.x == null || g.y == null) return;
+      const x = g.x, y = g.y;
+      // Screen nearly flat: gravity is on Z, not on screen X/Y.
       if (Math.max(Math.abs(x), Math.abs(y)) < 6) return;
       lastGravityReading = Date.now();
-      if (Math.abs(x) > 7 && Math.abs(x) > Math.abs(y) * 1.45) {
-        consider(x > 0 ? "right" : "left");
-      } else if (Math.abs(y) > 7 && Math.abs(y) > Math.abs(x) * 1.45) {
-        consider("portrait");
-      } else {
-        consider(null);
+      if (sensor !== "motion") {
+        sensor = "motion";
+        setSensorStatus("motion");
       }
-    };
+      if (Math.abs(x) > 6.5 && Math.abs(x) > Math.abs(y) * 1.25) {
+        // The lowered physical side is the new bottom edge.
+        report(x > 0 ? "right" : "left");
+      } else if (Math.abs(y) > 6.5 && Math.abs(y) > Math.abs(x) * 1.25) {
+        report("portrait");
+      }
+    }
 
-    const onOrientation = (event: DeviceOrientationEvent) => {
-      // Ignore this backup if gravity is already reporting. The two APIs
-      // use different axes on some Android phones.
-      if (Date.now() - lastGravityReading < 1500) return;
+    function onOrientation(event: DeviceOrientationEvent) {
+      // Ignore the gyroscope when the accelerometer is giving usable data;
+      // conflicting streams can otherwise keep resetting the turning timer.
+      if (Date.now() - lastGravityReading < 1800) return;
       if (event.gamma == null || event.beta == null) return;
-      const gamma = event.gamma;
-      const beta = event.beta;
-      if (Math.abs(gamma) > 55 && Math.abs(beta) < 110) {
-        consider(gamma > 0 ? "right" : "left");
-      } else if (Math.abs(gamma) < 30 && Math.abs(beta) < 85) {
-        consider("portrait");
-      } else {
-        consider(null);
+      const gamma = event.gamma, beta = event.beta;
+      if (sensor !== "orientation") {
+        sensor = "orientation";
+        setSensorStatus("orientation");
       }
-    };
+      if (Math.abs(gamma) > 50 && Math.abs(beta) < 110) {
+        report(gamma > 0 ? "right" : "left");
+      } else if (Math.abs(gamma) < 28 && Math.abs(beta) < 115) {
+        report("portrait");
+      }
+    }
 
     window.addEventListener("devicemotion", onMotion);
     window.addEventListener("deviceorientation", onOrientation);
@@ -138,6 +150,36 @@ export default function MercuryCamera({
       window.removeEventListener("deviceorientation", onOrientation);
     };
   }, []);
+
+  // iOS and some browsers need a direct tap before releasing motion-sensor
+  // readings. Both permission requests are made immediately in the click
+  // handler, before awaiting either one (user activation is required).
+  async function enableMotionControls() {
+    setManualTurn(null);
+    setSensorNotice("");
+    type PermissionAPI = { requestPermission?: () => Promise<"granted" | "denied"> };
+    const motion = window.DeviceMotionEvent as unknown as PermissionAPI | undefined;
+    const orientation = window.DeviceOrientationEvent as unknown as PermissionAPI | undefined;
+    const requests: Promise<"granted" | "denied">[] = [];
+    try {
+      if (typeof motion?.requestPermission === "function") {
+        requests.push(motion.requestPermission());
+      }
+      if (typeof orientation?.requestPermission === "function") {
+        requests.push(orientation.requestPermission());
+      }
+      if (requests.length === 0) {
+        setSensorNotice("Listening for movement. Turn the phone sideways.");
+        return;
+      }
+      const results = await Promise.all(requests);
+      setSensorNotice(results.every(result => result === "granted")
+        ? "Motion enabled. Turn the phone sideways."
+        : "Motion permission was denied; use MOVE BTNS instead.");
+    } catch {
+      setSensorNotice("Motion access unavailable; use MOVE BTNS instead.");
+    }
+  }
 
   // Only lock while MercuryCamera is mounted, never in other Mercury pages.
   // Mobile browsers often require fullscreen before allowing a lock.
@@ -450,26 +492,29 @@ export default function MercuryCamera({
     }
   }
 
-  // When the viewport is held portrait, follow the phone's physical turn.
-  // Rotate buttons rather than the video, so capture/photo geometry stays intact.
+  // This dock is an entire *horizontal bar* (zoom - / MARK / zoom +).
+  // When the handset is physically sideways but the viewport stays portrait,
+  // rotate the whole bar and center MARK on the physical bottom (left/right).
+  // Rotating just the buttons left MARK incorrectly centered in a vertical stack.
   const viewportPortrait = !viewport || viewport.height >= viewport.width;
   const effectiveTurn = manualTurn ?? physicalTurn;
-  const controlsSideways = viewportPortrait && effectiveTurn !== "portrait";
-  const controlRotation = controlsSideways
-    ? { transform: `rotate(${effectiveTurn === "right" ? -90 : 90}deg)` }
-    : undefined;
-  const controlsPosition = controlsSideways
+  const dockIsSideways = ready && viewportPortrait && effectiveTurn !== "portrait";
+  const dockRotation = effectiveTurn === "right" ? -90 : 90;
+  const dockWidth = Math.max(235, Math.min(440, (viewport?.height ?? 700) - 120));
+  const dockStyle = dockIsSideways
     ? {
         position: "absolute" as const,
+        left: effectiveTurn === "right" ? "calc(100% - 47px)" : "47px",
         top: "50%",
-        ...(effectiveTurn === "right"
-          ? { right: "max(8px, env(safe-area-inset-right))" }
-          : { left: "max(8px, env(safe-area-inset-left))" }),
-        transform: "translateY(-50%)",
-        width: "88px",
-        paddingBottom: 0,
+        width: `${dockWidth}px`,
+        transform: `translate(-50%, -50%) rotate(${dockRotation}deg)`,
+        transformOrigin: "center center",
       }
-    : { paddingBottom: "max(20px, env(safe-area-inset-bottom))" };
+    : {
+        position: "absolute" as const,
+        left: 0, right: 0, bottom: 0,
+        paddingBottom: "max(20px, env(safe-area-inset-bottom))",
+      };
 
   return (
     <div
@@ -507,7 +552,7 @@ export default function MercuryCamera({
         style={{ paddingTop: "env(safe-area-inset-top)" }}
       >
         <span className="max-w-[34%] shrink rounded-full bg-black/60 px-2 py-2 text-[10px] font-bold tracking-wide sm:px-3 sm:text-xs">
-          MERCURY CAMERA · U1
+          MERCURY CAMERA · U2
         </span>
 
         <div className="flex shrink-0 items-center gap-1">
@@ -519,6 +564,14 @@ export default function MercuryCamera({
             className="flex h-11 items-center justify-center rounded-full bg-black/70 px-2 text-[10px] font-bold disabled:opacity-75 sm:h-12 sm:px-3 sm:text-xs"
           >
             {portraitLocked ? "PORTRAIT ✓" : "LOCK PORTRAIT"}
+          </button>}
+          {ready && <button
+            type="button"
+            aria-label="Enable automatic physical rotation of Mark and zoom controls"
+            onClick={() => void enableMotionControls()}
+            className="rounded-lg bg-black/75 px-2 py-3 text-[10px] font-bold"
+          >
+            AUTO BTNS
           </button>}
           {ready && <button
             type="button"
@@ -544,7 +597,7 @@ export default function MercuryCamera({
         <div className="absolute inset-0 z-10 flex items-center justify-center px-4 text-center">
           <div className="w-full max-w-sm rounded-xl bg-black/80 p-4">
             <p className="mb-3 text-sm font-bold">
-              {opening ? "Connecting to phone camera…" : "Mercury camera · U1 (manual start)"}
+              {opening ? "Connecting to phone camera…" : "Mercury camera · U2 (manual start)"}
             </p>
             {error && (
               <p role="alert" className="mb-3 break-words rounded-lg bg-red-950 p-3 text-left text-sm text-red-100">
@@ -584,45 +637,44 @@ export default function MercuryCamera({
       {/* Bottom visibility gradient */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-black/80 to-transparent" />
 
-      {/* Camera controls */}
-      <div
-        className={controlsSideways
-          ? "z-20 flex shrink-0 flex-col items-center justify-center gap-3"
-          : "absolute bottom-0 left-0 right-0 z-20 flex flex-col items-center gap-3 px-4"}
-        style={controlsPosition}
-      >
-        {(error || message) && ready && (
-          <p
-            role="status"
-            className="max-w-full rounded-lg bg-black/70 px-3 py-2 text-center text-xs"
-          >
-            {error || message}
-          </p>
-        )}
+      {/* Visible diagnostic: verifies whether physical sensor updates arrive. */}
+      {ready && (
+        <div className="pointer-events-none absolute left-2 right-2 top-20 z-20 text-center text-[11px] text-white">
+          <span className="inline-block rounded bg-black/65 px-2 py-1">
+            {manualTurn !== null
+              ? `BUTTONS: MANUAL ${manualTurn.toUpperCase()}`
+              : `BUTTONS: ${sensorStatus === "waiting" ? "WAITING FOR SENSOR" : `${physicalTurn.toUpperCase()} · ${sensorStatus.toUpperCase()}`}`}
+          </span>
+          {sensorNotice && <p className="mt-1 rounded bg-black/65 px-2 py-1">{sensorNotice}</p>}
+          {(error || message) && <p role="status" className="mt-1 rounded bg-black/65 px-2 py-1">{error || message}</p>}
+        </div>
+      )}
 
-        <div className={controlsSideways
-          ? "flex flex-col items-center justify-center gap-3"
-          : "flex w-full max-w-sm items-center justify-between gap-2 sm:gap-4"}>
+      {/* Entire control bar follows the physical bottom edge of the handset. */}
+      <div
+        className="z-20 flex flex-col items-center gap-2 px-2"
+        style={dockStyle}
+      >
+        <div className="flex w-full max-w-sm items-center justify-between gap-3">
           <button
             type="button"
             aria-label="Zoom out"
             disabled={!ready || zoom <= 1 || busy}
             onClick={() => void changeZoom(zoom - 0.5)}
-            style={controlRotation}
-            className="h-12 w-12 rounded-full bg-black/65 text-2xl disabled:opacity-40"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black/65 text-2xl disabled:opacity-40"
           >
             −
           </button>
 
           <button
             type="button"
-            aria-label="Capture photo"
+            aria-label="Mark surface and capture photo"
             disabled={!ready || busy || disabled}
             onClick={() => void capture()}
-            style={controlRotation}
-            className="flex h-20 w-20 items-center justify-center rounded-full border-4 border-white bg-amber-400 text-3xl text-black shadow-xl disabled:opacity-50"
+            className="flex h-20 w-20 shrink-0 flex-col items-center justify-center rounded-full border-4 border-white bg-amber-400 font-bold text-black shadow-xl disabled:opacity-50"
           >
-            {busy ? "…" : "●"}
+            <span className="text-2xl leading-none">{busy ? "…" : "●"}</span>
+            <span className="mt-1 text-[10px] leading-none">MARK</span>
           </button>
 
           <button
@@ -630,14 +682,12 @@ export default function MercuryCamera({
             aria-label="Zoom in"
             disabled={!ready || zoom >= maxZoom || busy}
             onClick={() => void changeZoom(zoom + 0.5)}
-            style={controlRotation}
-            className="h-12 w-12 rounded-full bg-black/65 text-2xl disabled:opacity-40"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black/65 text-2xl disabled:opacity-40"
           >
             +
           </button>
         </div>
-
-        <span style={controlRotation} className="rounded-full bg-black/60 px-3 py-1 text-xs">
+        <span className="rounded-full bg-black/60 px-3 py-1 text-xs">
           {zoom.toFixed(1)}×
         </span>
       </div>
