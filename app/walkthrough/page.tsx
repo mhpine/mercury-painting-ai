@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
+import MercuryCamera, { type MercuryCameraHandle } from "../components/MercuryCamera";
 
 type Project = {
   id: string;
@@ -141,6 +142,9 @@ export default function WalkthroughPage() {
   const [openings, setOpenings] = useState<Opening[]>([]);
   const [photo, setPhoto] = useState("");
   const [photoPath, setPhotoPath] = useState("");
+  // SURFACE_MERCURY_CAMERA_V1: use the established camera for the active surface form.
+  const [surfaceCameraVisible, setSurfaceCameraVisible] = useState(false);
+  const surfaceCameraRef = useRef<MercuryCameraHandle>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [projectPhotos, setProjectPhotos] = useState<ProjectPhoto[]>([]);
   const [loadingPhotos, setLoadingPhotos] = useState(false);
@@ -531,9 +535,8 @@ export default function WalkthroughPage() {
     document.getElementById("surface-name")?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
-  async function handlePhoto(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file || !selectedProjectId || uploadingPhoto) return;
+  async function saveSurfacePhoto(file: File | undefined, sourceInput?: HTMLInputElement): Promise<boolean> {
+    if (!file || !selectedProjectId || uploadingPhoto) return false;
     const projectId = selectedProjectId;
     setPhotoAnalysis("");
     setAiFindings(null);
@@ -542,11 +545,11 @@ export default function WalkthroughPage() {
     setPhotoPath("");
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
       setMessage("Choose a JPEG, PNG, or WebP image.");
-      return;
+      return false;
     }
     if (file.size > 20 * 1024 * 1024) {
       setMessage("Choose an image under 20 MB.");
-      return;
+      return false;
     }
     setUploadingPhoto(true);
     setMessage("Preparing and saving photo to this project...");
@@ -598,14 +601,19 @@ export default function WalkthroughPage() {
           setPhotoGalleryError(galleryError instanceof Error ? galleryError.message : "Unable to refresh photos.");
         }
       }
+      return true;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save photo.");
-      event.target.value = "";
+      if (sourceInput) sourceInput.value = "";
+      return false;
     } finally {
       setUploadingPhoto(false);
     }
   }
 
+  function handlePhoto(event: React.ChangeEvent<HTMLInputElement>) {
+    void saveSurfacePhoto(event.target.files?.[0], event.target);
+  }
   const canCreateProject = role === "admin";
   const visibleNavigation = navigation.filter((item) => item.href !== "/settings" || role === "admin");
 
@@ -615,6 +623,17 @@ export default function WalkthroughPage() {
 
   return (
     <main className="min-h-screen bg-[#F5F5F5] text-[#252525]">
+      <MercuryCamera
+        ref={surfaceCameraRef}
+        visible={surfaceCameraVisible}
+        disabled={!selectedProjectId || uploadingPhoto || saving}
+        onClose={() => setSurfaceCameraVisible(false)}
+        onCapture={async (file) => {
+          const saved = await saveSurfacePhoto(file);
+          // A failed upload stays in camera so the painter can retry.
+          if (saved) setSurfaceCameraVisible(false);
+        }}
+      />
       {/* Approved Mercury header */}
       <header className="relative z-30 border-b border-gray-200 bg-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-3">
@@ -1013,15 +1032,30 @@ export default function WalkthroughPage() {
                     onChange={(e) => setForm({ ...form, notes: e.target.value })} />
                 </div>
                 <div>
-                  <label htmlFor="surface-photo" className={labelStyle}>
-                    Surface Photo
-                  </label>
-                  <input id="surface-photo" type="file" accept="image/*"
-                    capture="environment" onChange={handlePhoto}
-                    className={inputStyle} />
+                  <label className={labelStyle}>Surface Photo</label>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Existing camera, one user-triggered stream request.
+                        setSurfaceCameraVisible(true);
+                        surfaceCameraRef.current?.start();
+                      }}
+                      disabled={!selectedProjectId || uploadingPhoto || saving}
+                      className="rounded-xl bg-[#252525] px-5 py-4 text-sm font-black text-white hover:bg-black disabled:opacity-50"
+                    >
+                      OPEN MERCURY CAMERA
+                    </button>
+                    <label htmlFor="surface-photo"
+                      className="inline-flex cursor-pointer items-center rounded-xl border-2 border-gray-300 px-5 py-4 text-sm font-bold text-[#252525] hover:bg-gray-50">
+                      UPLOAD EXISTING PHOTO
+                    </label>
+                    <input id="surface-photo" type="file" accept="image/jpeg,image/png,image/webp"
+                      onChange={handlePhoto} className="sr-only" />
+                  </div>
                   <p className="mt-2 text-xs text-gray-500">
-                    Take a photo or upload an image up to 20 MB. It will be resized and compressed automatically.
-                    Photos are saved with the walkthrough in Supabase. Large images increase database usage.
+                    MARK captures a photo directly into this surface form. The existing AI review
+                    and Save Painting Surface actions remain available. You may also upload a saved image.
                   </p>
                   {photo && (
                     <div className="mt-4">
