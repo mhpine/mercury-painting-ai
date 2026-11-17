@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabase";
+import MercuryCamera from "../components/MercuryCamera";
 
 const PHOTO_BUCKET = "mercury-project-photos";
 
@@ -18,12 +19,9 @@ type MercuryProject = {
 export default function LiveScanPage() {
   const searchParams = useSearchParams();
 const activeProjectId = searchParams.get("projectId");
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
   const savingRef = useRef(false);
 
-  const [cameraOn, setCameraOn] = useState(false);
+  const [cameraVisible, setCameraVisible] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -141,66 +139,6 @@ useEffect(() => {
       active = false;
     };
   }, []);
-const autoStartedProjectRef = useRef<string | null>(null);
-
-useEffect(() => {
-  if (!activeProjectId || activeProjectId !== projectId) return;
-
-  // Attempt automatic startup only once per project.
-  if (autoStartedProjectRef.current === projectId) return;
-
-  autoStartedProjectRef.current = projectId;
-
-  if (!streamRef.current) {
-    void startCamera();
-  }
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [activeProjectId, projectId]);
-  async function startCamera() {
-    setError("");
-    setMessage("");
-
-    try {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error(
-          "Camera access requires HTTPS or localhost."
-        );
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-      });
-
-      streamRef.current = stream;
-
-      if (!videoRef.current) {
-        stream.getTracks().forEach((track) => track.stop());
-        throw new Error("Camera display is missing.");
-      }
-
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-
-      setCameraOn(true);
-    } catch (err) {
-      streamRef.current
-        ?.getTracks()
-        .forEach((track) => track.stop());
-
-      streamRef.current = null;
-
-      setError(
-        err instanceof Error ? err.message : "Camera failed."
-      );
-    }
-  }
-
 async function analyzeLiveScanPhoto(
   imageDataUrl: string,
   selectedProjectId: string
@@ -247,221 +185,96 @@ async function analyzeLiveScanPhoto(
   };
 }
 
-  async function markPhoto() {
+  // Photo is supplied by the shared, fullscreen MercuryCamera component.
+  // Keep this file responsible for project storage, AI analysis and approval.
+  async function markPhoto(file: File): Promise<void> {
     if (savingRef.current) return;
     if (inspection && !approvedInspection) {
-      setError(
-        "You have an unfinished AI inspection. Review and approve it before taking another photo."
-      );
+      setError("Review and approve the unfinished inspection before taking another photo.");
       return;
     }
-    setError("");
-    setMessage("");
-
     if (!projectId) {
       setError("Select a Mercury project before taking a photo.");
       return;
     }
 
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-
-    if (!video || !canvas) {
-      setError("Camera or canvas is missing.");
-      return;
-    }
-
-    if (video.readyState < 2 || video.videoWidth === 0) {
-      setError("Camera is not ready. Try again.");
-      return;
-    }
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-
-    const context = canvas.getContext("2d");
-
-    if (!context) {
-      setError("Unable to capture photo.");
-      return;
-    }
-
-    context.drawImage(
-      video,
-      0,
-      0,
-      canvas.width,
-      canvas.height
-    );
-
+    setError("");
+    setMessage("");
     savingRef.current = true;
     setSavingPhoto(true);
 
     try {
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(
-          (result) => {
-            if (result) {
-              resolve(result);
-            } else {
-              reject(new Error("Photo capture failed."));
-            }
-          },
-          "image/jpeg",
-          0.9
-        );
-      });
-
       const {
         data: { user },
         error: authError,
       } = await supabase.auth.getUser();
 
-      if (authError || !user) {
-        throw new Error("Please sign in to save project photos.");
-      }
+      if (authError || !user) throw new Error("Please sign in to save project photos.");
 
+      // The camera supplies a JPEG File; no second camera stream is opened here.
+      const photoFile = file;
       const path = `${projectId}/${crypto.randomUUID()}.jpg`;
-
       const { error: uploadError } = await supabase.storage
         .from(PHOTO_BUCKET)
-        .upload(path, blob, {
-          contentType: "image/jpeg",
-          upsert: false,
-        });
+        .upload(path, photoFile, { contentType: "image/jpeg", upsert: false });
 
-      if (uploadError) {
-        throw new Error(
-          `Photo upload failed: ${uploadError.message}`
+      if (uploadError) throw new Error(`Photo upload failed: ${uploadError.message}`);
+
+      setMessage("Photo saved! Mercury AI is analyzing the surface...");
+
+      try {
+        // Analyze a reduced copy without affecting the stored original.
+        const image = await createImageBitmap(photoFile);
+        const maxDimension = 1280;
+        const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+        const aiCanvas = document.createElement("canvas");
+        aiCanvas.width = Math.max(1, Math.round(image.width * scale));
+        aiCanvas.height = Math.max(1, Math.round(image.height * scale));
+        const ctx = aiCanvas.getContext("2d");
+        if (!ctx) { image.close(); throw new Error("Unable to prepare photo for AI."); }
+        ctx.drawImage(image, 0, 0, aiCanvas.width, aiCanvas.height);
+        image.close();
+        const result = await analyzeLiveScanPhoto(
+          aiCanvas.toDataURL("image/jpeg", 0.7), projectId
         );
+
+        const { data: savedInspection, error: inspectionSaveError } = await supabase
+          .from("mercury_inspections")
+          .insert({
+            project_id: projectId,
+            analysis: result.analysis,
+            findings: { ...result.findings },
+            status: "draft",
+          })
+          .select("id")
+          .single();
+
+        if (inspectionSaveError) {
+          throw new Error(`Unable to save AI inspection: ${inspectionSaveError.message}`);
+        }
+
+        setInspection({ analysis: result.analysis, findings: { ...result.findings } });
+        setInspectionId(savedInspection.id);
+        setEditingInspection(false);
+        setApprovedInspection(false);
+        setMessage("Photo saved! AI inspection complete. Review the findings below.");
+      } catch (aiError) {
+        setMessage("Photo saved successfully, but AI analysis could not be completed.");
+        setError(aiError instanceof Error ? aiError.message : "AI analysis failed.");
       }
-
-      
-setMessage("Photo saved! Mercury AI is analyzing the surface...");
-
-try {
-  // Use a separate, compressed image for AI analysis.
-  // The original photo has already been saved to Supabase.
-  const aiCanvas = document.createElement("canvas");
-  const maxDimension = 1280;
-  const scale = Math.min(
-    1,
-    maxDimension / Math.max(canvas.width, canvas.height)
-  );
-
-  aiCanvas.width = Math.round(canvas.width * scale);
-  aiCanvas.height = Math.round(canvas.height * scale);
-
-  const aiContext = aiCanvas.getContext("2d");
-
-  if (!aiContext) {
-    throw new Error("Unable to prepare photo for AI.");
-  }
-
-  aiContext.drawImage(
-    canvas,
-    0,
-    0,
-    aiCanvas.width,
-    aiCanvas.height
-  );
-
-  const imageDataUrl = aiCanvas.toDataURL("image/jpeg", 0.7);
-
- 
-const result = await analyzeLiveScanPhoto(
-  imageDataUrl,
-  projectId
-);
-
-// Save the AI inspection permanently to Supabase.
-const inspectionData = {
-  project_id: projectId,
-  analysis: result.analysis,
-  findings: { ...result.findings },
-  status: "draft",
-};
-
-const { data: savedInspection, error: inspectionSaveError } =
-  await supabase
-    .from("mercury_inspections")
-    .insert(inspectionData)
-    .select("id")
-    .single();
-
-if (inspectionSaveError) {
-  throw new Error(
-    `Unable to save AI inspection: ${inspectionSaveError.message}`
-  );
-}
-
-// Display the saved inspection.
-setInspection({
-  analysis: result.analysis,
-  findings: { ...result.findings },
-});
-
-console.log("Mercury inspection saved:", savedInspection.id);
-setInspectionId(savedInspection.id);
-// Every new inspection requires painter review.
-setEditingInspection(false);
-setApprovedInspection(false);
-
-setMessage(
-  "Photo saved! AI inspection complete. Review the findings below."
-);
-
-} catch (aiError) {
-  setMessage(
-    "Photo saved successfully, but AI analysis could not be completed."
-  );
-
-  setError(
-    aiError instanceof Error
-      ? aiError.message
-      : "AI analysis failed."
-  );
-}
-
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to save photo."
-      );
+      setError(err instanceof Error ? err.message : "Unable to save photo.");
     } finally {
       savingRef.current = false;
       setSavingPhoto(false);
     }
   }
 
-  function stopCamera() {
-    streamRef.current
-      ?.getTracks()
-      .forEach((track) => track.stop());
-
-    streamRef.current = null;
-
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-
-    setCameraOn(false);
-  }
-
-  useEffect(() => {
-    return () => {
-      streamRef.current
-        ?.getTracks()
-        .forEach((track) => track.stop());
-    };
-  }, []);
-
   return (
     <main className="min-h-screen bg-slate-950 p-4 text-white">
       <div className="mx-auto max-w-4xl">
         <h1 className="mb-2 text-3xl font-bold">
-          Mercury LiveScan
+          Mercury LiveScan — ROUTE FIX 1
         </h1>
 
         <p className="mb-5 text-slate-300">
@@ -532,67 +345,46 @@ setMessage(
           )}
         </div>
 )}
-        <div className="relative overflow-hidden rounded-xl border border-slate-700 bg-black">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="aspect-video w-full object-contain"
-          />
-
-          {!cameraOn && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/70">
-              <span className="text-slate-300">
-                Camera is off
-              </span>
-            </div>
-          )}
-        </div>
-
         {error && (
-          <p className="mt-4 rounded-lg bg-red-900 p-3 text-red-100">
+          <p role="alert" className="mt-4 rounded-lg bg-red-900 p-3 text-red-100">
             {error}
           </p>
         )}
 
         {message && (
-          <p className="mt-4 rounded-lg bg-emerald-900 p-3 text-emerald-100">
+          <p role="status" className="mt-4 rounded-lg bg-emerald-900 p-3 text-emerald-100">
             {message}
           </p>
         )}
 
-<div className="mt-5 flex flex-wrap gap-3">
-  {!cameraOn ? (
-    <button
-      type="button"
-      onClick={startCamera}
-      disabled={!projectId}
-      className="rounded-lg bg-emerald-600 px-6 py-3 font-bold text-white disabled:opacity-50"
-    >
-      START CAMERA
-    </button>
-  ) : (
-    <>
-      <button
-        type="button"
-        onClick={markPhoto}
-        disabled={savingPhoto || !projectId}
-        className="rounded-lg bg-amber-500 px-6 py-3 font-bold text-black disabled:opacity-50"
-      >
-        {savingPhoto ? "ANALYZING..." : "MARK PHOTO"}
-      </button>
+        {/* Single entry to the fullscreen camera. Legacy inline preview has been removed. */}
+        <div className="mt-5">
+          <button
+            type="button"
+            disabled={!projectId || savingPhoto || Boolean(inspection && !approvedInspection)}
+            onClick={() => setCameraVisible(true)}
+            className="rounded-lg bg-amber-400 px-6 py-3 font-bold text-black disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            OPEN FULLSCREEN CAMERA
+          </button>
+          {!projectId && <p className="mt-2 text-sm text-slate-300">Select a project first.</p>}
+          {inspection && !approvedInspection && (
+            <p className="mt-2 text-sm text-amber-300">Review and approve the current inspection to capture another surface.</p>
+          )}
+        </div>
 
-      <button
-        type="button"
-        onClick={stopCamera}
-        className="rounded-lg bg-red-600 px-6 py-3 font-bold text-white"
-      >
-        STOP CAMERA
-      </button>
-    </>
-  )}
-</div>
+        {cameraVisible && (
+          <MercuryCamera
+            disabled={!projectId || savingPhoto}
+            onClose={() => setCameraVisible(false)}
+            onCapture={async (file) => {
+              // The source stream is owned by MercuryCamera and is closed by unmount.
+              setCameraVisible(false);
+              await markPhoto(file);
+            }}
+          />
+        )}
+
 {inspection && !approvedInspection && (
   <section className="mt-5 rounded-xl border border-emerald-500 bg-slate-900 p-4 shadow-xl">
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -733,9 +525,6 @@ if (transferError) {
 }
 
 setApprovedInspection(true);
-setMessage("Inspection saved. Opening project...");
-
-setApprovedInspection(true);
 setEditingInspection(false);
 setMessage(
   "Inspection approved and saved to the project. Camera ready for the next surface."
@@ -748,18 +537,12 @@ setMessage(
     </div>
 
     <p className="mt-3 text-xs text-slate-400">
-      Approval is currently for this session only.
-      Findings are not yet saved to the project estimate.
+      Approved findings are transferred to the project walkthrough when the save succeeds.
+      Confirm surface measurements before calculating an estimate.
     </p>
   </section>
 )}
-
-    </div>  
-
-      <canvas
-        ref={canvasRef}
-        style={{ display: "none" }}
-      />
+      </div>
     </main>
   );
 }
