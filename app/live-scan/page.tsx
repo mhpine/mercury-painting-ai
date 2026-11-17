@@ -275,25 +275,25 @@ async function analyzeLiveScanPhoto(
     <main className="min-h-screen bg-slate-950 p-4 text-white">
       <div className="mx-auto max-w-4xl">
         <h1 className="mb-2 text-3xl font-bold">
-          Mercury LiveScan — ROUTE FIX 1
+          Mercury LiveScan
         </h1>
 
         <p className="mb-5 text-slate-300">
           Live AI Painting Inspection
         </p>
-        {/* LIVE_SCAN_NAV_V1: navigation only; protected camera and inspection flows unchanged. */}
-        <nav aria-label="LiveScan navigation" className="mb-5 flex flex-wrap gap-3">
+        {/* LIVE_SCAN_NAV_V2: compact ghost labels only; routes unchanged. */}
+        <nav aria-label="LiveScan navigation" className="mb-5 flex flex-wrap items-center gap-3">
           <Link
             href={projectId ? `/walkthrough?projectId=${encodeURIComponent(projectId)}` : "/projects"}
-            className="inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-500 px-5 py-3 font-bold text-white hover:bg-slate-800"
+            className="inline-flex min-h-11 items-center justify-center rounded-full border border-white/25 bg-white/5 px-4 py-2.5 text-sm font-medium text-slate-100 transition-colors hover:border-white/45 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400"
           >
-            â† BACK TO WALKTHROUGH
+            Walkthrough
           </Link>
           <Link
             href={projectId ? `/estimates?projectId=${encodeURIComponent(projectId)}` : "/estimates"}
-            className="inline-flex min-h-12 items-center justify-center rounded-xl bg-emerald-600 px-5 py-3 font-bold text-white hover:bg-emerald-700"
+            className="inline-flex min-h-11 items-center justify-center rounded-full border border-white/25 bg-white/5 px-4 py-2.5 text-sm font-medium text-slate-100 transition-colors hover:border-white/45 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400"
           >
-            GO TO ESTIMATE â†’
+            Estimate
           </Link>
         </nav>
 {!activeProjectId && (
