@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabase";
-import MercuryCamera from "../components/MercuryCamera";
+import MercuryCamera, { type MercuryCameraHandle } from "../components/MercuryCamera";
 
 const PHOTO_BUCKET = "mercury-project-photos";
 
@@ -22,6 +22,7 @@ export default function LiveScanPage() {
 const activeProjectId = searchParams.get("projectId");
   const savingRef = useRef(false);
 
+  const cameraHandleRef = useRef<MercuryCameraHandle>(null);
   const [cameraVisible, setCameraVisible] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -378,7 +379,11 @@ async function analyzeLiveScanPhoto(
           <button
             type="button"
             disabled={!projectId || savingPhoto || Boolean(inspection && !approvedInspection)}
-            onClick={() => setCameraVisible(true)}
+            onClick={() => {
+              // Same user tap: show the overlay and start its single media request.
+              setCameraVisible(true);
+              cameraHandleRef.current?.start();
+            }}
             className="rounded-lg bg-amber-400 px-6 py-3 font-bold text-black disabled:cursor-not-allowed disabled:opacity-50"
           >
             OPEN FULLSCREEN CAMERA
@@ -389,17 +394,17 @@ async function analyzeLiveScanPhoto(
           )}
         </div>
 
-        {cameraVisible && (
-          <MercuryCamera
+        <MercuryCamera
+            ref={cameraHandleRef}
+            visible={cameraVisible}
             disabled={!projectId || savingPhoto}
             onClose={() => setCameraVisible(false)}
             onCapture={async (file) => {
-              // The source stream is owned by MercuryCamera and is closed by unmount.
+              // Hiding MercuryCamera stops the stream, then analysis runs unchanged.
               setCameraVisible(false);
               await markPhoto(file);
             }}
           />
-        )}
 
 {inspection && !approvedInspection && (
   <section className="mt-5 rounded-xl border border-emerald-500 bg-slate-900 p-4 shadow-xl">

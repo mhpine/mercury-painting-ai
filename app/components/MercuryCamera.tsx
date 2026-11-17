@@ -1,12 +1,13 @@
 
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 type Props = {
   onCapture: (file: File) => Promise<void>;
   onClose: () => void;
   disabled?: boolean;
+  visible?: boolean;
 };
 
 /**
@@ -18,11 +19,16 @@ type Props = {
  * - Optional live AI segmentation overlay
  * - Existing photo-analysis workflow remains unchanged
  */
-export default function MercuryCamera({
+export type MercuryCameraHandle = { start: () => void };
+
+// LiveScan can request the existing camera stream directly from the first click.
+// Other callers keep the original default-visible, manual-start behavior.
+const MercuryCamera = forwardRef<MercuryCameraHandle, Props>(function MercuryCamera({
   onCapture,
   onClose,
   disabled = false,
-}: Props) {
+  visible = true,
+}, handleRef) {
   const cameraRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -226,6 +232,16 @@ export default function MercuryCamera({
     }
   }, []);
 
+  // One tap on LiveScan invokes the SAME guarded, user-initiated start() call.
+  // It does not add another getUserMedia request, retry, or startup effect.
+  useImperativeHandle(handleRef, () => ({
+    start: () => { void start("rear"); },
+  }), [start]);
+  // Keep the video element mounted so the click can request permission directly.
+  // Hiding the camera (including after MARK) stops its stream immediately.
+  useEffect(() => {
+    if (!visible) stop();
+  }, [visible, stop]);
   // Unmount: free the camera. In-flight requests are invalidated and their
   // eventual streams are stopped; no setState on unmounted components.
   useEffect(() => () => {
@@ -410,6 +426,7 @@ export default function MercuryCamera({
       aria-label="Mercury camera"
       className="fixed inset-0 z-[9999] flex flex-col overflow-hidden bg-black text-white"
       style={{
+        display: visible ? "flex" : "none",
         height: viewport ? `${viewport.height}px` : "100dvh",
         width: viewport ? `${viewport.width}px` : "100vw",
       }}
@@ -520,4 +537,6 @@ export default function MercuryCamera({
       </button>
     </div>
   );
-}
+});
+
+export default MercuryCamera;
