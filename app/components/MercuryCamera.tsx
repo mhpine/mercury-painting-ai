@@ -40,18 +40,11 @@ export default function MercuryCamera({
   const [zoom, setZoom] = useState(1);
   const [nativeZoom, setNativeZoom] = useState(false);
   const [maxZoom, setMaxZoom] = useState(3);
-  const [message, setMessage] = useState("");
   const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null);
-  const [portraitLocked, setPortraitLocked] = useState(false);
-  const orientationLockedRef = useRef(false);
-  const mountedRef = useRef(false);
 
   // UI orientation is separate from the camera stream and never restarts it.
   type PhysicalTurn = "portrait" | "right" | "left";
   const [physicalTurn, setPhysicalTurn] = useState<PhysicalTurn>("portrait");
-  const [manualTurn, setManualTurn] = useState<PhysicalTurn | null>(null);
-  const [sensorStatus, setSensorStatus] = useState<"waiting" | "motion" | "orientation">("waiting");
-  const [sensorNotice, setSensorNotice] = useState("");
 
   // The browser viewport can change while the camera is open (rotation,
   // browser chrome appearing/disappearing, or Android entering fullscreen).
@@ -88,7 +81,6 @@ export default function MercuryCamera({
     let pending: PhysicalTurn | null = null;
     let pendingSince = 0;
     let lastGravityReading = 0;
-    let sensor: "waiting" | "motion" | "orientation" = "waiting";
 
     function report(next: PhysicalTurn | null) {
       if (!next) return; // Ignore flat, diagonal, and unreliable readings.
@@ -114,10 +106,6 @@ export default function MercuryCamera({
       // Screen nearly flat: gravity is on Z, not on screen X/Y.
       if (Math.max(Math.abs(x), Math.abs(y)) < 6) return;
       lastGravityReading = Date.now();
-      if (sensor !== "motion") {
-        sensor = "motion";
-        setSensorStatus("motion");
-      }
       if (Math.abs(x) > 6.5 && Math.abs(x) > Math.abs(y) * 1.25) {
         // accelerationIncludingGravity measures G-force opposite gravity.
         // Positive X means the LEFT edge is physically DOWN; U2 had this reversed.
@@ -133,10 +121,6 @@ export default function MercuryCamera({
       if (Date.now() - lastGravityReading < 1800) return;
       if (event.gamma == null || event.beta == null) return;
       const gamma = event.gamma, beta = event.beta;
-      if (sensor !== "orientation") {
-        sensor = "orientation";
-        setSensorStatus("orientation");
-      }
       if (Math.abs(gamma) > 50 && Math.abs(beta) < 110) {
         report(gamma > 0 ? "right" : "left");
       } else if (Math.abs(gamma) < 28 && Math.abs(beta) < 115) {
@@ -152,118 +136,9 @@ export default function MercuryCamera({
     };
   }, []);
 
-  // iOS and some browsers need a direct tap before releasing motion-sensor
-  // readings. Both permission requests are made immediately in the click
-  // handler, before awaiting either one (user activation is required).
-  async function enableMotionControls() {
-    setManualTurn(null);
-    setSensorNotice("");
-    type PermissionAPI = { requestPermission?: () => Promise<"granted" | "denied"> };
-    const motion = window.DeviceMotionEvent as unknown as PermissionAPI | undefined;
-    const orientation = window.DeviceOrientationEvent as unknown as PermissionAPI | undefined;
-    const requests: Promise<"granted" | "denied">[] = [];
-    try {
-      if (typeof motion?.requestPermission === "function") {
-        requests.push(motion.requestPermission());
-      }
-      if (typeof orientation?.requestPermission === "function") {
-        requests.push(orientation.requestPermission());
-      }
-      if (requests.length === 0) {
-        setSensorNotice("Listening for movement. Turn the phone sideways.");
-        return;
-      }
-      const results = await Promise.all(requests);
-      setSensorNotice(results.every(result => result === "granted")
-        ? "Motion enabled. Turn the phone sideways."
-        : "Motion permission was denied; use MOVE BTNS instead.");
-    } catch {
-      setSensorNotice("Motion access unavailable; use MOVE BTNS instead.");
-    }
-  }
-
-  // Only lock while MercuryCamera is mounted, never in other Mercury pages.
-  // Mobile browsers often require fullscreen before allowing a lock.
-  const requestPortraitLock = useCallback(async (showFailure: boolean): Promise<boolean> => {
-    const orientation = screen.orientation as (ScreenOrientation & {
-      lock?: (mode: "portrait-primary") => Promise<void>;
-    }) | undefined;
-
-    if (!orientation?.lock) {
-      if (showFailure && mountedRef.current) {
-        setMessage("This browser cannot lock portrait. Camera remains active; use MOVE BTNS if motion sensing is blocked.");
-      }
-      return false;
-    }
-
-    try {
-      await orientation.lock("portrait-primary");
-      if (!mountedRef.current) {
-        orientation.unlock();
-        return false;
-      }
-      orientationLockedRef.current = true;
-      setPortraitLocked(true);
-      setMessage("");
-      return true;
-    } catch {
-      if (showFailure && mountedRef.current) {
-        setMessage("Browser blocked portrait lock. Use Mercury as an installed app or use MOVE BTNS; camera remains active.");
-      }
-      return false;
-    }
-  }, []);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    // Keep physical orientation locking separate from camera startup.
-    // The LOCK PORTRAIT button remains available after video is running.
-
-    const syncFullscreen = () => {
-      if (!document.fullscreenElement && orientationLockedRef.current) {
-        // Some browsers release a lock when they leave fullscreen.
-        orientationLockedRef.current = false;
-        setPortraitLocked(false);
-      }
-    };
-    document.addEventListener("fullscreenchange", syncFullscreen);
-
-    return () => {
-      mountedRef.current = false;
-      document.removeEventListener("fullscreenchange", syncFullscreen);
-      if (orientationLockedRef.current) {
-        screen.orientation?.unlock();
-        orientationLockedRef.current = false;
-      }
-    };
-  }, [requestPortraitLock]);
-
-  // On ordinary Chrome tabs, entering fullscreen requires a user tap.
-  // This is the only reliable fallback when the automatic lock is denied.
-  async function enablePortraitLock() {
-    if (portraitLocked) return;
-    try {
-      if (!document.fullscreenElement && cameraRef.current?.requestFullscreen) {
-        await cameraRef.current.requestFullscreen();
-      }
-    } catch {
-      // A lock may still work without fullscreen (e.g. installed PWA).
-    }
-    await requestPortraitLock(true);
-  }
-
-  function closeCamera() {
-    stop();
-    if (orientationLockedRef.current) {
-      screen.orientation?.unlock();
-      orientationLockedRef.current = false;
-    }
-    if (document.fullscreenElement === cameraRef.current) {
-      void document.exitFullscreen().catch(() => {});
-    }
-    onClose();
-  }
-
+  // The camera has a clean view with only MARK and zoom controls.
+  // Android/browser Back exits the LiveScan page; Escape closes the overlay
+  // on laptops without adding a permanent button over the video.
   const stop = useCallback(() => {
     // Invalidate any permission request that may still be resolving.
     requestNumberRef.current += 1;
@@ -274,6 +149,17 @@ export default function MercuryCamera({
     setOpening(false);
     setReady(false);
   }, []);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        stop();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [onClose, stop]);
 
   // IMPORTANT: a single user-initiated request, not an automatic request
   // on React mount. Never open two streams or automatically retry.
@@ -288,7 +174,6 @@ export default function MercuryCamera({
     setOpening(true);
     setReady(false);
     setError("");
-    setMessage("");
     let stream: MediaStream | null = null;
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -326,7 +211,6 @@ export default function MercuryCamera({
       }
       setZoom(1);
       setReady(true);
-      setMessage(mode === "basic" ? "Basic camera stream active." : "Rear camera stream active.");
     } catch (problem) {
       stream?.getTracks().forEach((track) => track.stop());
       if (videoRef.current) videoRef.current.srcObject = null;
@@ -409,7 +293,6 @@ export default function MercuryCamera({
     busyRef.current = true;
     setBusy(true);
     setError("");
-    setMessage("");
 
     try {
       const canvas = document.createElement("canvas");
@@ -482,7 +365,6 @@ export default function MercuryCamera({
       // Preserve the caller's existing photo analysis and approval.
       await onCapture(file);
 
-      setMessage("Photo captured.");
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "Capture failed."
@@ -493,7 +375,7 @@ export default function MercuryCamera({
     }
   }
 
-  // U3 orientation fix: device motion G-force sign now matches the device
+  // Keep U3’s working orientation mapping: G-force sign matches the device
   // orientation (gamma) fallback, so automatic side selection cannot put MARK
   // on the upper physical edge when the display remains portrait locked.
   // This dock is an entire *horizontal bar* (zoom - / MARK / zoom +).
@@ -501,7 +383,7 @@ export default function MercuryCamera({
   // rotate the whole bar and center MARK on the physical bottom (left/right).
   // Rotating just the buttons left MARK incorrectly centered in a vertical stack.
   const viewportPortrait = !viewport || viewport.height >= viewport.width;
-  const effectiveTurn = manualTurn ?? physicalTurn;
+  const effectiveTurn = physicalTurn;
   const dockIsSideways = ready && viewportPortrait && effectiveTurn !== "portrait";
   const dockRotation = effectiveTurn === "right" ? -90 : 90;
   const dockWidth = Math.max(235, Math.min(440, (viewport?.height ?? 700) - 120));
@@ -547,61 +429,12 @@ export default function MercuryCamera({
         }}
       />
 
-      {/* Top visibility gradient */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-black/70 to-transparent" />
-
-      {/* Camera header */}
-      <div
-        className="relative z-20 flex w-full shrink-0 items-start justify-between gap-1 px-2 pt-3 sm:gap-2 sm:px-4 sm:pt-4"
-        style={{ paddingTop: "env(safe-area-inset-top)" }}
-      >
-        <span className="max-w-[34%] shrink rounded-full bg-black/60 px-2 py-2 text-[10px] font-bold tracking-wide sm:px-3 sm:text-xs">
-          MERCURY CAMERA · U3
-        </span>
-
-        <div className="flex shrink-0 items-center gap-1">
-          {ready && <button
-            type="button"
-            aria-label={portraitLocked ? "Portrait orientation locked" : "Lock camera to portrait"}
-            onClick={() => void enablePortraitLock()}
-            disabled={portraitLocked}
-            className="flex h-11 items-center justify-center rounded-full bg-black/70 px-2 text-[10px] font-bold disabled:opacity-75 sm:h-12 sm:px-3 sm:text-xs"
-          >
-            {portraitLocked ? "PORTRAIT ✓" : "LOCK PORTRAIT"}
-          </button>}
-          {ready && <button
-            type="button"
-            aria-label="Enable automatic physical rotation of Mark and zoom controls"
-            onClick={() => void enableMotionControls()}
-            className="rounded-lg bg-black/75 px-2 py-3 text-[10px] font-bold"
-          >
-            AUTO BTNS
-          </button>}
-          {ready && <button
-            type="button"
-            aria-label="Move camera controls manually; tap to cycle right, left, portrait and automatic"
-            onClick={() => setManualTurn((current) => current === null ? "right" : current === "right" ? "left" : current === "left" ? "portrait" : null)}
-            className="rounded-lg bg-black/75 px-2 py-3 text-[10px] font-bold"
-          >
-            {manualTurn === null ? "MOVE BTNS" : manualTurn === "right" ? "RIGHT" : manualTurn === "left" ? "LEFT" : "PORTRAIT"}
-          </button>}
-          <button
-            type="button"
-            aria-label="Close camera"
-            onClick={closeCamera}
-            className="flex h-11 w-11 items-center justify-center rounded-full bg-black/70 text-2xl sm:h-12 sm:w-12"
-          >
-            ×
-          </button>
-        </div>
-      </div>
-
       {/* Camera startup: request only after an explicit tap. */}
       {!ready && (
         <div className="absolute inset-0 z-10 flex items-center justify-center px-4 text-center">
           <div className="w-full max-w-sm rounded-xl bg-black/80 p-4">
             <p className="mb-3 text-sm font-bold">
-              {opening ? "Connecting to phone camera…" : "Mercury camera · U3"}
+              {opening ? "Connecting to phone camera…" : "Mercury camera · U4"}
             </p>
             {error && (
               <p role="alert" className="mb-3 break-words rounded-lg bg-red-950 p-3 text-left text-sm text-red-100">
@@ -637,24 +470,15 @@ export default function MercuryCamera({
         onChange={(event: { currentTarget: HTMLInputElement }) => void useNativePhoto(event.currentTarget.files?.[0])}
       />
 
-      {/* Bottom visibility gradient */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-black/80 to-transparent" />
-
-      {/* Visible diagnostic: verifies whether physical sensor updates arrive. */}
-      {ready && (
-        <div className="pointer-events-none absolute left-2 right-2 top-20 z-20 text-center text-[11px] text-white">
-          <span className="inline-block rounded bg-black/65 px-2 py-1">
-            {manualTurn !== null
-              ? `BUTTONS: MANUAL ${manualTurn.toUpperCase()}`
-              : `BUTTONS: ${sensorStatus === "waiting" ? "WAITING FOR SENSOR" : `${physicalTurn.toUpperCase()} · ${sensorStatus.toUpperCase()}`}`}
-          </span>
-          {sensorNotice && <p className="mt-1 rounded bg-black/65 px-2 py-1">{sensorNotice}</p>}
-          {(error || message) && <p role="status" className="mt-1 rounded bg-black/65 px-2 py-1">{error || message}</p>}
-        </div>
+      {/* Errors appear only when something fails; no permanent HUD or labels. */}
+      {ready && error && (
+        <p role="alert" className="pointer-events-none absolute inset-x-4 top-4 z-20 rounded-lg bg-red-950/85 px-3 py-2 text-center text-sm text-white">
+          {error}
+        </p>
       )}
 
       {/* Entire control bar follows the physical bottom edge of the handset. */}
-      <div
+      {ready && <div
         className="z-20 flex flex-col items-center gap-2 px-2"
         style={dockStyle}
       >
@@ -690,10 +514,10 @@ export default function MercuryCamera({
             +
           </button>
         </div>
-        <span className="rounded-full bg-black/60 px-3 py-1 text-xs">
-          {zoom.toFixed(1)}×
-        </span>
-      </div>
+      </div>}
+      <button type="button" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-30 focus:rounded focus:bg-black focus:px-4 focus:py-2" onClick={() => { stop(); onClose(); }}>
+        Close camera
+      </button>
     </div>
   );
 }
