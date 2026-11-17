@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import MercuryCamera from "../components/MercuryCamera";
@@ -280,6 +281,21 @@ async function analyzeLiveScanPhoto(
         <p className="mb-5 text-slate-300">
           Live AI Painting Inspection
         </p>
+        {/* LIVE_SCAN_NAV_V1: navigation only; protected camera and inspection flows unchanged. */}
+        <nav aria-label="LiveScan navigation" className="mb-5 flex flex-wrap gap-3">
+          <Link
+            href={projectId ? `/walkthrough?projectId=${encodeURIComponent(projectId)}` : "/projects"}
+            className="inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-500 px-5 py-3 font-bold text-white hover:bg-slate-800"
+          >
+            â† BACK TO WALKTHROUGH
+          </Link>
+          <Link
+            href={projectId ? `/estimates?projectId=${encodeURIComponent(projectId)}` : "/estimates"}
+            className="inline-flex min-h-12 items-center justify-center rounded-xl bg-emerald-600 px-5 py-3 font-bold text-white hover:bg-emerald-700"
+          >
+            GO TO ESTIMATE â†’
+          </Link>
+        </nav>
 {!activeProjectId && (
         <div className="mb-4 rounded-lg border border-slate-700 bg-slate-900 p-4">
           <label
