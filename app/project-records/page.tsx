@@ -312,6 +312,86 @@ export default function ProjectRecordsPage() {
     } finally { setBusy(false); }
   }
 
+
+  // Project Records only: remove an unlinked photo from the selected project's Storage folder.
+  // Never modify recorded surfaces, archived reports, or the existing camera/estimate flows.
+  async function removeSelectedPhoto() {
+    if (!selectedPhoto || !projectId || busy || loadingRecords) return;
+    const currentProjectId = projectId;
+    const chosenPath = selectedPhoto.path;
+    if (!projects.some((project) => project.id === currentProjectId) ||
+        !photos.some((item) => item.path === chosenPath)) {
+      setError("Select a photo in a project you can access before deleting.");
+      return;
+    }
+    // Avoid passing arbitrary object paths to Storage.remove.
+    const prefix = `${currentProjectId}/`;
+    const filename = chosenPath.startsWith(prefix) ? chosenPath.slice(prefix.length) : "";
+    if (!filename || filename.includes("/") || filename.includes("\\") ||
+        !/\.(jpe?g|png|webp)$/i.test(filename)) {
+      setError("Invalid project photo path. No photo was deleted.");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      if (unsaved?.photoPath === chosenPath) {
+        throw new Error("This photo has unsaved AI findings. Save or export those findings before removing the photo.");
+      }
+
+      // Re-read stored surfaces instead of trusting the loaded first-page list.
+      const { data: walkthrough, error: walkthroughError } = await supabase
+        .from("mercury_walkthroughs")
+        .select("walkthrough_data")
+        .eq("project_id", currentProjectId)
+        .maybeSingle();
+      if (walkthroughError) throw new Error(`Could not verify surface photo links: ${walkthroughError.message}`);
+      // Guard against photoPath and any additional photo references in the saved surface data.
+      if (JSON.stringify(walkthrough?.walkthrough_data ?? {}).includes(JSON.stringify(chosenPath))) {
+        throw new Error("This photo is linked to a recorded surface. It must be detached from that surface before permanent deletion.");
+      }
+
+      // Report history may have more than the 100 records shown on the screen.
+      const { data: linkedReports, error: reportError } = await supabase
+        .from("mercury_inspection_reports")
+        .select("id")
+        .eq("project_id", currentProjectId)
+        .eq("photo_path", chosenPath)
+        .limit(1);
+      if (reportError) {
+        // Before the additive archive migration, this new table cannot contain reports.
+        // Any other error (including permissions) MUST block deletion.
+        if (!["PGRST205", "42P01"].includes(reportError.code ?? "")) {
+          throw new Error(`Could not verify archived AI report links: ${reportError.message}`);
+        }
+      } else if ((linkedReports ?? []).length > 0) {
+        throw new Error("This photo belongs to a saved AI inspection report. It cannot be permanently deleted from the library.");
+      }
+
+      const confirmed = window.confirm(
+        `Permanently delete this photo from the project?\n\n${filename}\n\n` +
+        "This removes the original image from Supabase Storage, not just this page. " +
+        "Older LiveScan inspections may not identify their source photo. " +
+        "Keep a copy if you may need the image later. This cannot be undone."
+      );
+      if (!confirmed) return;
+
+      // Existing Storage RLS must authorize the deletion. Do not relax policies here.
+      const { error: deleteError } = await supabase.storage.from(PHOTO_BUCKET).remove([chosenPath]);
+      if (deleteError) throw new Error(`Photo deletion was not permitted or failed: ${deleteError.message}`);
+      const remaining = photos.filter((item) => item.path !== chosenPath);
+      setPhotos((current) => current.filter((item) => item.path !== chosenPath));
+      setSelectedPhotoPath((current) => current === chosenPath ? (remaining[0]?.path ?? "") : current);
+      setMessage("Photo deleted from the project library. All surfaces, AI reports and estimates were left unchanged.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to remove the selected photo. Nothing else was changed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function exportReport() {
     if (!activeReport) return;
     downloadJson({
@@ -388,6 +468,25 @@ export default function ProjectRecordsPage() {
                 </button>
               ))}
             </div>
+            {selectedPhoto && (
+              <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-black uppercase tracking-wide text-gray-500">Selected photo</p>
+                    <p className="truncate text-sm font-semibold" title={selectedPhoto.name}>{selectedPhoto.name}</p>
+                  </div>
+                  <button type="button" onClick={() => void removeSelectedPhoto()}
+                    disabled={busy || loadingRecords}
+                    className="rounded-lg border-2 border-red-600 px-4 py-3 text-sm font-black text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40">
+                    {busy ? "WORKING…" : "DELETE PHOTO"}
+                  </button>
+                </div>
+                <p className="mt-2 text-xs leading-5 text-gray-600">
+                  Permanent deletion requires confirmation. Photos assigned to a recorded surface or saved AI report are protected.
+                  Older LiveScan reports may not track the source photo. Keep an independent copy of important images.
+                </p>
+              </div>
+            )}
           </div>
           <div className="rounded-2xl bg-white p-5 shadow-sm">
             <h2 className="mb-3 text-xl font-black">New AI Inspection</h2>
