@@ -80,16 +80,47 @@ export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
 
+ 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("mercury_projects");
-      const parsed = saved ? JSON.parse(saved) : [];
+    let active = true;
 
-      setProjects(Array.isArray(parsed) ? parsed : []);
-    } catch {
-      setProjects([]);
+    async function loadProjects() {
+      try {
+        const { data: userData, error: authError } =
+          await supabase.auth.getUser();
+
+        if (authError || !userData.user) {
+          throw new Error("Unable to identify signed-in user.");
+        }
+
+        const { data, error } = await supabase
+          .from("mercury_projects")
+          .select("id, status")
+          .eq("owner_id", userData.user.id);
+
+        if (error) throw error;
+
+        if (active) {
+          setProjects(
+            (data ?? []).map((project) => ({
+              id: project.id,
+              status: project.status || "Draft",
+            }))
+          );
+        }
+      } catch (error) {
+        console.error("Unable to load dashboard projects:", error);
+        if (active) setProjects([]);
+      }
     }
+
+    void loadProjects();
+
+    return () => {
+      active = false;
+    };
   }, []);
+
 
   useEffect(() => {
     let mounted = true;
