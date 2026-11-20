@@ -1,4 +1,5 @@
 "use client";
+import ProjectPhotoViewer from "../components/ProjectPhotoViewer";
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
@@ -142,6 +143,7 @@ export default function WalkthroughPage() {
   const [openings, setOpenings] = useState<Opening[]>([]);
   const [photo, setPhoto] = useState("");
   const [photoPath, setPhotoPath] = useState("");
+  const [recordedSurfaceViewer, setRecordedSurfaceViewer] = useState<{ url: string; name: string } | null>(null);
   // SURFACE_MERCURY_CAMERA_V1: use the established camera for the active surface form.
   const [surfaceCameraVisible, setSurfaceCameraVisible] = useState(false);
   const surfaceCameraRef = useRef<MercuryCameraHandle>(null);
@@ -1179,11 +1181,25 @@ export default function WalkthroughPage() {
                   {surfaces.map((surface) => (
                     <div key={surface.id}
                       className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-md">
-                      {surface.photo && (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={surface.photo} alt={surface.name}
-                          className="h-56 w-full object-cover" />
-                      )}
+                      {(() => {
+                        // New surfaces store the private Storage path; older records may contain inline photo data.
+                        const linkedPhotoUrl = surface.photoPath
+                          ? projectPhotos.find((item) => item.path === surface.photoPath)?.url
+                          : undefined;
+                        const photoUrl = linkedPhotoUrl || surface.photo;
+                        return photoUrl ? (
+                          <button type="button"
+                            onClick={() => setRecordedSurfaceViewer({ url: photoUrl, name: surface.name })}
+                            aria-label={`View and zoom photo for ${surface.name}`}
+                            className="relative block w-full text-left">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={photoUrl} alt={surface.name} className="h-56 w-full object-contain bg-gray-100" />
+                            <span className="absolute bottom-2 right-2 rounded-full bg-black/75 px-3 py-2 text-xs font-bold text-white">VIEW / ZOOM</span>
+                          </button>
+                        ) : surface.photoPath ? (
+                          <p className="bg-yellow-50 p-3 text-xs text-yellow-900">A photo is linked to this surface, but it could not be loaded. Refresh the project to renew its private image link.</p>
+                        ) : null;
+                      })()}
                       <div className="p-6">
                         <div className="flex items-start justify-between gap-4">
                           <div>
@@ -1261,6 +1277,13 @@ export default function WalkthroughPage() {
           </p>
         </div>
       </footer>
-    </main>
+    {recordedSurfaceViewer && (
+        <ProjectPhotoViewer
+          url={recordedSurfaceViewer.url}
+          name={recordedSurfaceViewer.name}
+          onClose={() => setRecordedSurfaceViewer(null)}
+        />
+      )}
+      </main>
   );
 }
