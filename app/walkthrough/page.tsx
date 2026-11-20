@@ -1046,6 +1046,12 @@ export default function WalkthroughPage() {
                     >
                       OPEN MERCURY CAMERA
                     </button>
+                    <button type="button"
+                      disabled={!selectedProjectId || uploadingPhoto || saving || loadingPhotos || projectPhotos.length === 0}
+                      onClick={() => document.getElementById("mercury-project-photo-gallery")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                      className="rounded-xl border-2 border-[#ED1C24] px-5 py-4 text-sm font-black text-[#ED1C24] hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">
+                      CHOOSE FROM PROJECT PHOTOS
+                    </button>
                     <label htmlFor="surface-photo"
                       className="inline-flex cursor-pointer items-center rounded-xl border-2 border-gray-300 px-5 py-4 text-sm font-bold text-[#252525] hover:bg-gray-50">
                       UPLOAD EXISTING PHOTO
@@ -1091,6 +1097,7 @@ export default function WalkthroughPage() {
     setAiFindings(null);
                          setPhotoAnalysisError("");
                          setPhoto("");
+                         setPhotoPath("");
                         const input = document.getElementById("surface-photo") as HTMLInputElement | null;
                         if (input) input.value = "";
                       }} className="mt-3 text-sm font-bold text-[#ED1C24]">
@@ -1112,7 +1119,7 @@ export default function WalkthroughPage() {
               </div>
             </form>
 
-             <section className="mt-10 rounded-2xl border border-gray-100 bg-white p-6 shadow-md">
+             <section id="mercury-project-photo-gallery" className="mt-10 rounded-2xl border border-gray-100 bg-white p-6 shadow-md">
                <div className="mb-4 flex items-center justify-between gap-3">
                  <div>
                    <h2 className="text-2xl font-black uppercase">Project Photos</h2>
@@ -1127,14 +1134,28 @@ export default function WalkthroughPage() {
                )}
                <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
                  {projectPhotos.map((item) => (
-                   <a key={item.path} href={item.url} target="_blank" rel="noopener noreferrer"
-                     className="block overflow-hidden rounded-xl border border-gray-200 hover:border-[#ED1C24]">
-                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                     <img src={item.url} alt="Project photo" className="aspect-square w-full object-cover" />
-                     <div className="p-2 text-xs text-gray-600">
-                       {item.createdAt ? new Date(item.createdAt).toLocaleString() : "Saved photo"}
-                     </div>
-                   </a>
+                   <div key={item.path} className="overflow-hidden rounded-xl border border-gray-200 hover:border-[#ED1C24]">
+                     <a href={item.url} target="_blank" rel="noopener noreferrer" className="block" aria-label="Open saved project photo">
+                       {/* eslint-disable-next-line @next/next/no-img-element */}
+                       <img src={item.url} alt="Project photo" className="aspect-square w-full object-cover" />
+                       <div className="p-2 text-xs text-gray-600">
+                         {item.createdAt ? new Date(item.createdAt).toLocaleString() : "Saved photo"}
+                       </div>
+                     </a>
+                     <button type="button" disabled={saving || uploadingPhoto || !selectedProjectId}
+                       onClick={() => {
+                         setPhoto(item.url);
+                         setPhotoPath(item.path);
+                         setPhotoAnalysis("");
+                         setAiFindings(null);
+                         setPhotoAnalysisError("");
+                         setMessage("Saved project photo selected for the current surface. Enter measurements and save the surface; no photo was uploaded or re-analyzed.");
+                         document.getElementById("surface-photo")?.closest("div")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                       }}
+                       className="w-full border-t border-gray-200 bg-red-50 px-2 py-3 text-xs font-black text-[#ED1C24] hover:bg-red-100 disabled:opacity-50">
+                       USE FOR CURRENT SURFACE
+                     </button>
+                   </div>
                  ))}
                </div>
                <p className="mt-4 text-xs text-gray-500">Photo links are temporary and private. Refresh the page to renew them when needed.</p>
