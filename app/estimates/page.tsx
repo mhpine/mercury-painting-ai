@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { supabase } from "../lib/supabase";
+import ProjectPhotoViewer from "../components/ProjectPhotoViewer";
 
 type Project = {
 
@@ -205,6 +206,8 @@ export default function EstimatesPage() {
   const [loadError, setLoadError] = useState("");
 
   const [projectPhotos, setProjectPhotos] = useState<ProjectPhoto[]>([]);
+  const [estimateViewerPhoto, setEstimateViewerPhoto] = useState<{ url: string; name: string } | null>(null);
+  useEffect(() => { setEstimateViewerPhoto(null); }, [selectedId]);
 
   const [photoLoading, setPhotoLoading] = useState(false);
 
@@ -1948,11 +1951,19 @@ const canvas = await html2canvas(element, {
 
                        {projectPhotos.map((item, index) => (
 
-                         <figure key={item.path || index} className="break-inside-avoid overflow-hidden rounded-xl border border-gray-200">
+                         <figure key={item.path || index} className="relative break-inside-avoid overflow-hidden rounded-xl border border-gray-200">
 
                            {/* eslint-disable-next-line @next/next/no-img-element */}
 
                            <img src={item.url} alt={`Project photo ${index + 1}`} className="h-52 w-full object-contain" />
+                           <button
+                             type="button"
+                             onClick={() => setEstimateViewerPhoto({ url: item.url, name: `Project photo ${index + 1}` })}
+                             aria-label={`Open project photo ${index + 1} full screen`}
+                             className="absolute inset-0 z-10 flex cursor-zoom-in items-start justify-end p-2 focus-visible:outline focus-visible:outline-4 focus-visible:outline-[#ed1c24] print:hidden"
+                           >
+                             <span aria-hidden="true" className="rounded-full bg-black/70 px-2 py-1 text-[10px] font-bold text-white">VIEW / ZOOM</span>
+                           </button>
 
                            <figcaption className="px-3 py-2 text-xs text-gray-500">Project photo {index + 1}</figcaption>
 
@@ -1966,6 +1977,15 @@ const canvas = await html2canvas(element, {
 
                  </div>
 
+                 {estimateViewerPhoto && (
+                   <div className="no-print print:hidden">
+                     <ProjectPhotoViewer
+                       url={estimateViewerPhoto.url}
+                       name={estimateViewerPhoto.name}
+                       onClose={() => setEstimateViewerPhoto(null)}
+                     />
+                   </div>
+                 )}
                  {surfaces.some((surface) => /AI photo observations/i.test(surface.notes ?? "")) && (
 
                    <div className="mt-10">
