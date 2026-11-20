@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { supabase } from "../lib/supabase";
+import ProjectPhotoViewer from "../components/ProjectPhotoViewer";
 
 // Opt-in Project Records laboratory. No existing camera, Walkthrough, or estimate route is modified.
 const PHOTO_BUCKET = "mercury-project-photos";
@@ -69,6 +70,7 @@ export default function ProjectRecordsPage() {
   const [reports, setReports] = useState<Report[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [selectedPhotoPath, setSelectedPhotoPath] = useState("");
+  const [viewerPhotoPath, setViewerPhotoPath] = useState("");
   const [surfaceId, setSurfaceId] = useState("");
   const [activeReportId, setActiveReportId] = useState("");
   const [status, setStatus] = useState<Status>("pending");
@@ -137,6 +139,7 @@ export default function ProjectRecordsPage() {
     setReports([]);
     setReviews([]);
     setSelectedPhotoPath("");
+    setViewerPhotoPath("");
     setSurfaceId("");
     setActiveReportId("");
     setUnsaved(null);
@@ -229,6 +232,7 @@ export default function ProjectRecordsPage() {
 
   const selectedProject = projects.find((p) => p.id === projectId);
   const selectedPhoto = photos.find((p) => p.path === selectedPhotoPath);
+  const viewerPhoto = photos.find((p) => p.path === viewerPhotoPath);
   const selectedSurface = surfaces.find((s) => s.id === surfaceId);
   const activeReport = reports.find((r) => r.id === activeReportId);
   const reportReviews = useMemo(() => reviews.filter((r) => r.report_id === activeReportId), [reviews, activeReportId]);
@@ -459,7 +463,7 @@ export default function ProjectRecordsPage() {
             {!loadingRecords && photos.length === 0 && <p className="rounded-xl bg-gray-50 p-4 text-sm text-gray-600">No photos found. Capture them in Mercury's existing camera first; they will appear here when saved to this project.</p>}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {photos.map((p) => (
-                <button key={p.path} type="button" onClick={() => setSelectedPhotoPath(p.path)} disabled={busy}
+                <button key={p.path} type="button" onClick={() => { setSelectedPhotoPath(p.path); setViewerPhotoPath(p.path); }} disabled={busy}
                   aria-pressed={selectedPhotoPath === p.path} aria-label={`Choose photo ${p.name}`}
                   className={`overflow-hidden rounded-xl border-4 text-left transition ${selectedPhotoPath === p.path ? "border-[#ed1c24]" : "border-transparent hover:border-gray-300"}`}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -592,6 +596,13 @@ export default function ProjectRecordsPage() {
           </div>
         </div>
       </section>}
+      {viewerPhoto && (
+        <ProjectPhotoViewer
+          url={viewerPhoto.url}
+          name={viewerPhoto.name}
+          onClose={() => setViewerPhotoPath("")}
+        />
+      )}
       <footer className="mercury-hide-print border-t-4 border-[#ffd400] bg-white px-5 py-6 text-center text-xs text-gray-500">
         Mercury Painting AI Estimator · Developed by ECI — Emerald Coast Innovations · Project Records Preview
       </footer>
